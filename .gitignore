@@ -1,0 +1,20 @@
+# Local user data, feedback drafts and market histories
+/data/
+/public/data/source/
+/artifacts/
+/dist/
+/build/
+/release/
+/node_modules/
+/work/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+*.zip
+*.exe
+*.png
+*.webp
+!public/icons/*.png
+!public/icons/*.webp

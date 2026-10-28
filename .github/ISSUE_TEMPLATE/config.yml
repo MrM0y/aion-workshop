@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Завантажити програму
+    url: https://github.com/MrM0y/aion-workshop/releases/latest
+    about: Завантаж один AION-Workshop.exe й запусти його.

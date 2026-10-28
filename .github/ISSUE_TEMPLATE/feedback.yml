@@ -1,0 +1,21 @@
+name: Пропозиція або помилка
+description: Розкажи, що покращити. У програмі кнопка «Відгук» сама додасть місце.
+title: "[Відгук] "
+labels: [feedback]
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: Що хочеш змінити?
+      placeholder: Де ти був, що натиснув і що хотів отримати?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версія програми
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Скриншот або додаткові подробиці
+      description: За бажанням перетягни сюди скриншот. Прибери приватну інформацію.

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {marketMovement} from '../public/market-movement.js';
+const now=Date.parse('2026-10-28T12:00:00Z');
+const series=values=>({bucket:'1h',points:values.map((listings,index)=>({ts:new Date(now-(values.length-1-index)*3600000).toISOString(),listings,close:100+index*10}))});
+test('market movement counts observed rises and falls without calling them purchases',()=>{const result=marketMovement(series([10,7,9,5]),{now});assert.equal(result.removed,7);assert.equal(result.added,2);assert.equal(result.confirmedSales,false);assert.equal(result.priceChange,30);});
+test('unknown count is not zero and does not bridge comparisons',()=>{const result=marketMovement(series([10,null,4,3]),{now});assert.equal(result.removed,1);assert.equal(result.skipped,2);});
+test('large gaps, stale responses and one snapshot do not manufacture movement',()=>{assert.equal(marketMovement(series([1]),{now}).available,false);assert.equal(marketMovement({...series([5,4]),_source:{stale:true}},{now}).available,false);const data=series([10,3]);data.points[0].ts=new Date(now-5*3600000).toISOString();assert.equal(marketMovement(data,{now}).available,false);});
+test('duplicate times and invalid counts cannot create extra removals',()=>{const data=series([10,9]);data.points.unshift({...data.points[0],listings:100});assert.equal(marketMovement(data,{now}).removed,1);assert.equal(marketMovement(series([3.5,2]),{now}).available,false);});
+test('merged insights records are not accepted as a single-granularity source response',()=>{assert.equal(marketMovement({prices:series([10,1]).points},{now}).available,false);});

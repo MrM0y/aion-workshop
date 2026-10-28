@@ -1,0 +1,12 @@
+* text=auto
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.cs text eol=lf
+*.cmd text eol=crlf
+# Windows PowerShell 5 reads the OCR script with its existing UTF-8 BOM.
+*.ps1 -text
+*.png binary
+*.webp binary

@@ -1,0 +1,24 @@
+.guide-root { position: fixed; inset: 0; z-index: 1000; pointer-events: none; font-family: "Segoe UI", system-ui, sans-serif; }
+.guide-shade { position: fixed; pointer-events: auto; background: rgb(10 22 16 / 64%); }
+.guide-highlight { position: fixed; pointer-events: none; border: 2px solid var(--accent, #286342); border-radius: 9px; box-shadow: 0 0 0 2px var(--surface, #fff); }
+.guide-card { box-sizing: border-box; position: fixed; pointer-events: auto; width: min(350px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow-y: auto; overscroll-behavior: contain; padding: 21px; border: 1px solid var(--line-strong, #bdc9bf); border-radius: 12px; background: var(--surface, #fff); color: var(--text, #17241e); box-shadow: 0 15px 65px rgb(0 0 0 / 25%); line-height: 1.5; text-align: left; }
+.guide-head { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 9px; }
+.guide-progress { color: var(--muted, #65716b); font-size: 12px; }
+.guide-card .guide-close { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; margin: -10px -10px -5px 0; border: 0; background: transparent; color: var(--muted, #65716b); font-size: 25px; }
+.guide-card .guide-close:hover { background: var(--surface-soft, #f3f5f2); color: var(--text, #17241e); }
+.guide-card .guide-title { margin: 0 0 10px; color: var(--text, #17241e); font-size: 20px; line-height: 1.3; font-weight: 650; letter-spacing: -.35px; }
+.guide-card .guide-text { margin: 0 0 16px; color: var(--text, #17241e); font-size: 14px; line-height: 1.65; white-space: pre-line; }
+.guide-card .guide-wait { margin: 0 0 15px; padding: 10px 12px; border-radius: 6px; background: var(--surface-soft, #f3f5f2); color: var(--muted, #65716b); font-size: 13px; line-height: 1.5; }
+.guide-card .guide-error { margin: 0 0 15px; color: var(--danger, #a53b32); font-size: 13px; }
+.guide-card button { min-height: 44px; border-radius: 6px; padding: 10px 16px; font: 600 14px/1.4 "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+.guide-card button:focus-visible { outline: 3px solid var(--focus, #3b7cba); outline-offset: 3px; }
+.guide-card button:disabled { opacity: .5; cursor: default; }
+.guide-card .guide-action { width: 100%; margin-bottom: 16px; border: 1px solid var(--line-strong, #bdc9bf); background: var(--surface, #fff); color: var(--accent, #286342); }
+.guide-card .guide-action:hover { background: var(--accent-soft, #eaf3eb); }
+.guide-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.guide-card .guide-back { margin-right: auto; border: 1px solid var(--line-strong, #bdc9bf); background: transparent; color: var(--text, #17241e); }
+.guide-card .guide-next { min-width: 105px; border: 1px solid var(--accent, #286342); background: var(--accent, #286342); color: var(--on-accent, #fff); }
+.guide-card .guide-skip { display: block; width: 100%; margin-top: 9px; border: 0; background: transparent; color: var(--muted, #65716b); font-size: 12px; font-weight: 400; text-decoration: underline; text-underline-offset: 3px; }
+.guide-card [hidden], .guide-highlight[hidden] { display: none !important; }
+@media (max-width: 600px) { .guide-card { padding: 17px; } .guide-card .guide-title { font-size: 19px; } }
+@media print { .guide-root { display: none !important; } }
