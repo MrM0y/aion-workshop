@@ -114,7 +114,10 @@ export function batchLossProbability({batch=10,normalProbability,specialProbabil
   return total?Math.min(1,Math.max(0,loss/total)):null;
 }
 
-/** Buy inputs directly; value normal and special replacement outputs separately. Values are PER ATTEMPT. */
+/** Compare direct inputs with the cheapest available resource routes.
+ * Values are PER ATTEMPT at quoted unit prices, not a finite-stock batch plan.
+ * Direct totals remain null when only a conversion route has a known price.
+ */
 export function analyzeMarket({catalog,market,overrides={},settings={},faction='Elyos'}) {
   const items=new Map((catalog.items||[]).map(item=>[String(item.id),item]));
   const prices=new Map((market.items||[]).map(item=>[String(item.id),item]));
@@ -164,28 +167,37 @@ export function analyzeMarket({catalog,market,overrides={},settings={},faction='
     if(!outputs.some(out=>out.tradable)){reject('Результати не призначені для продажу на ринку');continue;}
     if(!Array.isArray(recipe.materials)||!recipe.materials.length){reject('Немає підтверджених матеріалів рецепта');continue;}
     const materials=recipe.materials.map(material=>{
-      const id=String(material.itemId),quoted=quote(id,{buy:true}),item=items.get(id);
-      if(quoted.price===null||!number(material.quantity)||material.quantity<=0)missing.add(id);else remember(quoted);
-      if(quoted.route)warnings.push(...quoted.route.warnings);
-      if(quoted.reference)warnings.push('Ціни NPC — довідкові дані джерела; можуть відрізнятися у вашому регіоні');
-      return {id,itemId:id,nameEn:item?.nameEn||null,nameRu:item?.nameRu||null,quantity:material.quantity,price:quoted.price,subtotal:quoted.price===null?null:quoted.price*material.quantity,source:quoted.source,at:quoted.at,sourceUrl:quoted.sourceUrl||null,reference:!!quoted.reference,directPrice:quoted.route?quoted.route.directPrice:quoted.price,acquisition:quoted.route||null};
+      const id=String(material.itemId),direct=directQuote(id,{buy:true}),optimized=quote(id,{buy:true}),item=items.get(id);
+      if(optimized.price===null||!number(material.quantity)||material.quantity<=0)missing.add(id);else remember(optimized);
+      if(direct.price!==null)remember(direct);
+      if(optimized.route)warnings.push(...optimized.route.warnings);
+      if(direct.reference)warnings.push('Ціни NPC — довідкові дані джерела; можуть відрізнятися у вашому регіоні');
+      return {id,itemId:id,nameEn:item?.nameEn||null,nameRu:item?.nameRu||null,quantity:material.quantity,price:direct.price,subtotal:direct.price===null?null:direct.price*material.quantity,source:direct.source,at:direct.at,sourceUrl:direct.sourceUrl||null,reference:!!direct.reference,directPrice:direct.price,
+        etherPrice:optimized.price,etherSubtotal:optimized.price===null?null:optimized.price*material.quantity,acquisition:optimized.route||null};
     });
     if(!number(recipe.fee)){unpriced.push({recipeId:String(recipe.id),missingIds:[...missing],reason:'Джерело не надало плату за крафт'});continue;}
     if(missing.size){unpriced.push({recipeId:String(recipe.id),missingIds:[...missing],reason:'Немає поточних цін для матеріалів або результатів'});continue;}
-    const materialCost=materials.reduce((sum,item)=>sum+item.subtotal,0),revenue=outputs.reduce((sum,item)=>sum+item.revenue,0);
-    const saleFee=revenue*saleTax/100,listingFee=revenue*listingTax/100,investment=materialCost+recipe.fee+listingFee;
-    const profit=revenue-saleFee-investment,roi=investment>0?profit/investment*100:null;
-    if(![materialCost,revenue,investment].every(number)||!Number.isFinite(profit)){reject('Суми перевищують межі розрахунку');continue;}
+    const directAvailable=materials.every(material=>number(material.subtotal));
+    const materialCost=directAvailable?materials.reduce((sum,item)=>sum+item.subtotal,0):null;
+    const etherMaterialCost=materials.reduce((sum,item)=>sum+item.etherSubtotal,0),revenue=outputs.reduce((sum,item)=>sum+item.revenue,0);
+    const saleFee=revenue*saleTax/100,listingFee=revenue*listingTax/100,investment=directAvailable?materialCost+recipe.fee+listingFee:null;
+    const profit=directAvailable?revenue-saleFee-investment:null,roi=investment>0?profit/investment*100:null;
+    const etherInvestment=etherMaterialCost+recipe.fee+listingFee,etherProfit=revenue-saleFee-etherInvestment,etherRoi=etherInvestment>0?etherProfit/etherInvestment*100:null;
+    if(![etherMaterialCost,revenue,etherInvestment].every(number)||!Number.isFinite(etherProfit)||(directAvailable&&(![materialCost,investment].every(number)||!Number.isFinite(profit)))){reject('Суми перевищують межі розрахунку');continue;}
     const netFactor=1-(saleTax+listingTax)/100;
     const normal=outputs.find(x=>x.kind==='normal'),special=outputs.find(x=>x.kind==='special');
-    const lossProbability=materials.some(material=>material.acquisition?.expected)?null:batchLossProbability({batch,normalProbability,specialProbability,normalNet:normal?normal.quantity*normal.price*netFactor:0,specialNet:special?special.quantity*special.price*netFactor:0,fixedCost:materialCost+recipe.fee});
+    const riskFor=cost=>batchLossProbability({batch,normalProbability,specialProbability,normalNet:normal?normal.quantity*normal.price*netFactor:0,specialNet:special?special.quantity*special.price*netFactor:0,fixedCost:cost+recipe.fee});
+    const lossProbability=directAvailable?riskFor(materialCost):null;
+    const etherLossProbability=materials.some(material=>material.acquisition?.expected)?null:riskFor(etherMaterialCost);
     const marketResult=prices.get(String(recipe.resultId));
     const oldestAt=observations.sort((a,b)=>Date.parse(a)-Date.parse(b))[0]??null;
     if(sourceStale)warnings.push('Джерело недоступне: використано попередній кеш');
     if(missingTime)warnings.push('Час частини цін невідомий');
-    if(lossProbability===null)warnings.push(materials.some(material=>material.acquisition?.expected)?'Ризик допоміжного крафту не оцінений; його витрати наведені в середньому.':'Ризик партії розраховується для 1–50 спроб');
+    if(etherLossProbability===null)warnings.push(materials.some(material=>material.acquisition?.expected)?'Ризик допоміжного крафту не оцінений; його витрати наведені в середньому.':'Ризик партії розраховується для 1–50 спроб');
     rows.push({recipeId:String(recipe.id),resultId:String(recipe.resultId),nameEn:recipe.nameEn||result?.nameEn||null,nameRu:recipe.nameRu||result?.nameRu||null,
       skill:recipe.skill,category:recipe.category,recipe,investment,profit,roi,revenue,materialCost,craftFee:recipe.fee,saleFee,listingFee,
+      directAvailable,etherAvailable:true,etherInvestment,etherProfit,etherRoi,etherMaterialCost,etherLossProbability,
+      etherSavings:directAvailable?Math.max(0,investment-etherInvestment):null,etherUsesConversion:materials.some(material=>material.acquisition?.kind==='produce'),
       materials,outputs,rates,batch,lossProbability,failureProbability:Math.max(0,1-normalProbability-specialProbability),
       liquidity:recipeSalesEvidence({outputs,market,now:settings.now??Date.now()}),
       volume:marketResult?.unitsSold??null,listedPrice:marketResult?.listed===false?null:marketResult?.price??null,saleAvg:marketResult?.saleAvg??null,saleMin:marketResult?.saleMin??null,saleMax:marketResult?.saleMax??null,

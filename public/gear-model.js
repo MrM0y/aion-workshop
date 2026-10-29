@@ -1,3 +1,4 @@
+import {planResourcePurchase} from './resource-routes.js';
 const nonnegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const chance = value => nonnegative(value) && value > 0 && value <= 1;
 const integer = value => Number.isSafeInteger(value) && value >= 0;
@@ -90,6 +91,9 @@ function singleStageQuantile(successes, probability, confidence) {
  * and pay fees. Existing stock has zero additional cash cost, not zero economic
  * value. Confidence budget assumes prices remain fixed and purchases can be made
  * as needed. It is not a simultaneous per-material stock guarantee.
+ * Optional resourceOptions evaluates deterministic integer-batch resource routes
+ * separately for every sampled demand vector, sharing owned stock and leftovers.
+ * It uses a bounded route search under constant quotes, not future book depth.
  */
 export function planGear(input = {}) {
   const issues = [], warnings = [], addIssue = text => { if (!issues.includes(text)) issues.push(text); };
@@ -163,6 +167,7 @@ export function planGear(input = {}) {
   }
   if (issues.length) return empty();
   const attemptsSum=stages.map(()=>0), quantitiesSum=materials.map(()=>0), boughtSum=materials.map(()=>0), costs=[];
+  const acquisition=input.resourceOptions, acquisitionCache=new Map(),purchaseSums=new Map();
   const sampleAttempts=samplers(randomGenerator(seed));
   const deterministic=probabilities.every(p=>p===1), runs=deterministic?1:iterations;
   let costSum=0,costSquares=0;
@@ -173,6 +178,16 @@ export function planGear(input = {}) {
     const bought=quantities.map((quantity,i)=>Math.max(0,quantity-materials[i].owned));
     let cost=fees;
     bought.forEach((quantity,i)=>{if(quantity>0&&!nonnegative(materials[i].price))addIssue(`Потрібна ціна матеріалу «${materials[i].name}».`);else if(quantity>0)cost+=quantity*materials[i].price;});
+    if(acquisition){
+      const key=quantities.join(',');let planned=acquisitionCache.get(key);
+      if(!planned){
+        const demands=quantities.map((quantity,i)=>({id:materials[i].id,quantity})).filter(row=>row.quantity>0);
+        planned=demands.length?planResourcePurchase({...acquisition,demands,inventory:rawStock,allowFlatEstimates:true,beamWidth:1,maxSplitUnits:0}):{eligible:true,cost:0,purchases:[],conversions:[]};
+        if(acquisitionCache.size<12000)acquisitionCache.set(key,planned);
+      }
+      if(!planned.eligible){addIssue('Не вдалося розрахувати переробку ресурсів.');return {quantities,bought,cost:NaN};}
+      return {quantities,bought,cost:fees+planned.cost,purchases:planned.purchases};
+    }
     return {quantities,bought,cost};
   }
   for(let run=0;run<runs;run++) {
@@ -188,22 +203,23 @@ export function planGear(input = {}) {
     attempts.forEach((n,i)=>attemptsSum[i]+=n);
     trial.quantities.forEach((n,i)=>quantitiesSum[i]+=n);
     trial.bought.forEach((n,i)=>boughtSum[i]+=n);
+    for(const purchase of trial.purchases||[]){const old=purchaseSums.get(purchase.id)||{id:purchase.id,quantity:0,cost:0};old.quantity+=purchase.quantity;old.cost+=purchase.cost;purchaseSums.set(purchase.id,old);}
     costs.push(trial.cost);costSum+=trial.cost;costSquares+=trial.cost*trial.cost;
   }
   // With no owned intermediate outputs or raw stock, linear expectations are exact.
   const noIntermediateStock=owned.slice(0,-1).every(n=>n===0);
   const noRawStock=materials.every(row=>row.owned===0);
   const expectedAttempts=noIntermediateStock?expectedAnalytical:attemptsSum.map(sum=>sum/runs);
-  const exactTrial=noIntermediateStock&&noRawStock?costOf(expectedAttempts):null;
+  const exactTrial=!acquisition&&noIntermediateStock&&noRawStock?costOf(expectedAttempts):null;
   const expectedMaterials=materials.map((row,i)=>{
     const buyQuantity=exactTrial?exactTrial.bought[i]:boughtSum[i]/runs;
     return {...row,quantity:exactTrial?exactTrial.quantities[i]:quantitiesSum[i]/runs,
-      buyQuantity,cost:buyQuantity===0?0:row.price===null?null:buyQuantity*row.price};
+      buyQuantity,cost:acquisition?null:buyQuantity===0?0:row.price===null?null:buyQuantity*row.price};
   });
   costs.sort((a,b)=>a-b);
   let quantileCost=costs[Math.ceil(confidence*runs)-1],probabilityAchieved=costs.filter(cost=>cost<=quantileCost).length/runs;
   let method=deterministic?'exact':'seeded-monte-carlo';
-  if(stages.length===1) {
+  if(stages.length===1&&!acquisition) {
     const exactAttempts=singleStageQuantile(targetCount-owned[0],probabilities[0],confidence);
     if(exactAttempts!==null){quantileCost=costOf([exactAttempts]).cost;method=deterministic?'exact':'exact-single-stage-with-sampled-stock-mean';
       probabilityAchieved=costs.filter(cost=>cost<=quantileCost).length/runs;
@@ -214,7 +230,8 @@ export function planGear(input = {}) {
   if(!deterministic)warnings.push('Бюджет із заданою ймовірністю не є гарантією. Рідкісні довгі серії невдач можуть потребувати більше грошей.');
   if(!deterministic&&(!noIntermediateStock||!noRawStock))warnings.push('Очікувані витрати з наявними запасами оцінено відтворюваним моделюванням, а не відніманням запасів від середньої потреби.');
   warnings.push('Наявні запаси не потребують нових грошей, але мають власну економічну вартість. Ціни та доступність матеріалів вважаються незмінними; матеріали можна докуповувати під час крафту.');
-  return {eligible:issues.length===0,issues,warnings,expectedAttempts,expectedMaterials,
+  if(acquisition)warnings.push('Переробки округлені до цілих партій у кожному сценарії; ринкові ціни сталі, наявність лотів не гарантована.');
+  return {eligible:issues.length===0,issues,warnings,expectedAttempts,expectedMaterials,expectedPurchases:[...purchaseSums.values()].map(row=>({...row,quantity:row.quantity/runs,cost:row.cost/runs})),resourceAcquisition:!!acquisition,
     expectedCost:issues.length?null:expectedCost,expectedCashOut:issues.length?null:expectedCost,
     quantileCost:issues.length?null:quantileCost,confidence,
     probabilityAchieved:issues.length?null:probabilityAchieved,method,iterations:runs,seed,standardErrorCost};

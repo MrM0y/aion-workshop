@@ -16,3 +16,5 @@
 @media(min-width:1201px){.gv-form{grid-template-columns:minmax(215px,1.2fr) minmax(200px,1fr) 65px 170px auto;gap:12px}}
 @media(max-width:850px){.gv-summary{grid-template-columns:1fr 1fr;padding:18px}.gv-result-empty{min-height:76px}.gv-materials{padding:18px 18px 0}.gv-sale,.gv-math{grid-column:auto}}
 @media(max-width:580px){.gv-summary{grid-template-columns:1fr;padding:16px;gap:10px}.gv-summary-top{padding:0}.gv-footnote,.gv-sale,.gv-math{grid-column:1}.gv-materials{padding:16px 16px 0}.gv-material-grid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}.gv-confidence-note{grid-column:1/-1}.gv-stock>div{grid-template-columns:1fr;width:330px}.gv-summary-top strong,.gv-budget strong{font-size:25px}}
+
+.gv-comparison{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:10px}.gv-comparison>div{padding:12px;border:1px solid var(--border);border-radius:9px;display:grid;gap:6px}.gv-comparison small{font-size:11px;color:var(--muted)}.gv-comparison strong{font-size:18px}.gv-comparison>div:last-child strong{color:var(--accent)}

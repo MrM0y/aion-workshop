@@ -82,7 +82,7 @@ export function buildGearStages({catalog,targetId,faction='Elyos',mastery=100,ma
     return {price:marketPrice,source:'market',at:listed?.capturedAt??null};
   }
   const resourceRouter=createResourceRouter({catalog,faction,mastery,...resourcePolicy(catalog,resourceSettings),quote:rawQuote});
-  function quote(id){const direct=rawQuote(id);if(resourceSettings.useConversions===false)return direct;const route=resourceRouter.quote(id);if(route.eligible&&route.kind==='produce'&&!route.expected&&route.steps.every(step=>step.yield===1)&&route.price<(direct.price??Infinity)){for(const warning of route.warnings)warn(warning);return {...direct,price:route.price,source:route.source,at:route.at,acquisition:route};}return direct;}
+  function quote(id){const direct=rawQuote(id);if(resourceSettings.useConversions===false)return direct;const route=resourceRouter.quote(id);if(route.eligible&&route.kind==='produce'&&!route.expected&&route.steps.every(step=>Number.isSafeInteger(step.expectedYield)&&step.expectedYield>0)&&route.price<(direct.price??Infinity)){for(const warning of route.warnings)warn(warning);return {...direct,price:route.price,source:route.source,at:route.at,directPrice:direct.price,acquisition:route};}return direct;}
   function visit(id,preferredId,depth=0) {
     if(path.has(id)){issue('У каталозі виявлено циклічну залежність рецептів.');return false;}
     if(depth>=12){issue('Ланцюг перевищує підтримувані дванадцять етапів.');return false;}
@@ -130,5 +130,6 @@ export function buildGearStages({catalog,targetId,faction='Elyos',mastery=100,ma
   }
   if(targetId==null||!isGearItem(ctx.items.get(String(targetId))||targetId))issue('Обери предмет спорядження з каталогу.');
   else visit(String(targetId));
-  return {stages,items:outputItems,issues,sourceWarnings,chainStartsFromPurchase};
+  const resourceOptions=resourceSettings.useConversions===false?null:{catalog,faction,mastery,...resourcePolicy(catalog,resourceSettings),quotesById:Object.fromEntries(resourceRouter.requiredIds(stages.flatMap(stage=>stage.materials.map(row=>row.id))).map(id=>{const quoted=rawQuote(id);return [id,quoted.source==='vendor'||quoted.source==='currency'?{vendorPrice:quoted.price,vendorReference:false}:{flatPrice:quoted.price}];}))};
+  return {stages,items:outputItems,issues,sourceWarnings,chainStartsFromPurchase,resourceOptions};
 }
