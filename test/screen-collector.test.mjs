@@ -96,6 +96,26 @@ test('actual AION2 columns recover icon quantities from observed total/unit, ret
   assert.deepEqual(result.levels.map(row=>[row.price,row.quantity]),[[2674,16],[2679,235],[2679,200],[2680,711],[2696,429],[2700,374],[2921,600],[2921,700]]);
 });
 
+test('unselected market rows work when OCR groups names, prices and totals into the same line',()=>{
+  const fixture=realGameFixture(),headers=fixture.lines.slice(0,4),lines=[...headers];
+  for(let index=4;index<fixture.lines.length-1;index+=4){const parts=fixture.lines.slice(index,index+4);lines.push({text:parts.map(part=>part.text).join(' '),words:parts.flatMap(part=>part.words)});}
+  lines.push(fixture.lines.at(-1));const frame={...fixture,lines,text:lines.map(line=>line.text).join('\n')};
+  const result=parseMarketRows(frame,gameBinding);assert.equal(result.unitsTotal,3265);assert.equal(result.levels.length,8);
+});
+
+test('combined column headings, wrapped names and unrelated sidebar selection do not require a selected lot',()=>{
+  const fixture=realGameFixture(),unit=fixture.lines[2],total=fixture.lines[3];fixture.lines.splice(2,2,{text:unit.text+' '+total.text,words:[...unit.words,...total.words]});
+  const first=fixture.lines[3],tail=first.words.pop();fixture.lines.push({text:tail.text,words:[{...tail,y:tail.y+22}]});first.text=first.words.map(word=>word.text).join(' ');
+  fixture.lines.push({text:'Несуществующий предмет',words:[word('Несуществующий предмет',3200,500)]});fixture.text=fixture.lines.map(line=>line.text).join('\n');
+  const result=parseMarketRows(fixture,gameBinding);assert.equal(result.levels.length,8);assert.equal(result.unitsTotal,3265);
+  assert.equal(parseMarketRows(fixture,{...gameBinding,itemNames:['Несуществующий предмет']}).available,false);
+});
+
+test('icon quantity misread as a Cyrillic letter does not pollute the item name cell',()=>{
+  const fixture=realGameFixture();fixture.lines.push({text:'з',words:[word('з',1546,724,8)]});
+  const result=parseMarketRows(fixture,gameBinding);assert.equal(result.levels.length,8);assert.equal(result.unitsTotal,3265);
+});
+
 test('mixed-item rows cannot acquire the globally selected item identity, and broken arithmetic is rejected',()=>{
   const ocr=realGameFixture();ocr.lines[4].text='Інший матеріал';ocr.lines[4].words[0].text='Інший матеріал';
   const result=parseMarketRows(ocr,gameBinding);assert.equal(result.unitsTotal,3249);assert.equal(result.levels[0].price,2679);

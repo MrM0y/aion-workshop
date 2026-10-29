@@ -1,5 +1,6 @@
 import {applySaleEvents} from './sale-model.js';
 import {renderLocalLab} from './local-lab-view.js';
+import {createCaptureGate,tableFingerprint} from './capture-gate.js';
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
 /** A paused capture must not turn an old image into a newly observed market book. */
@@ -16,7 +17,7 @@ export function captureMatchesSession({capturedServer,currentServer,live=false,c
 
 /** One user-selected window, local PNG OCR, no game controls or remote uploads. */
 export function createGameCollector({api,dialog,context,onFrame,onRecords,onStatus,lab=null}={}){
-  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено',lastVideoFrame=null,lastImage=null,diagnostics=null,labTimer=null,labBusy=false,labRevision=null;
+  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено',gate=createCaptureGate(),thumbnail=null,diagnostics=null,labTimer=null,labBusy=false,labRevision=null;
   const update=message=>{status=message;onStatus?.({active:Boolean(stream),message});const target=document.querySelector('#collectorStatus');if(target)target.textContent=message;const button=document.querySelector('#collectorStart');if(button)button.textContent=stream?'Зупинити зчитування':'Вибрати вікно гри';};
   function stop(){clearInterval(timer);stream?.getTracks().forEach(track=>track.stop());stream=null;video?.remove();video=null;baseline=false;lastText.clear();update('Зчитування зупинено');}
   function reconcile(candidates){
@@ -47,22 +48,28 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
     diagnostics={...result.diagnostics,sampleOnly:result.sampleOnly===true,sampleBooks:result.sampleOnly?result.books:null};const count=diagnostics?.lots??Object.values(result.books||{}).reduce((sum,book)=>sum+book.levels.length,0);
     update(result.lab?.ok===false?result.lab.error:count?`Прочитано ${count} лотів${result.sampleOnly?' · тестове зображення':result.lab?.duplicates?' · без змін':''} · ${new Date(result.capturedAt).toLocaleTimeString('uk-UA')}`:result.reason||'Чекаю на ринок або повідомлення про продаж');
     if(lab?.enabled)refreshLab();
-    return true;
+    return count>0;
   }
   async function capture(){
-    if(busy||!stream||!video?.videoWidth)return;
+    if(!stream||!video?.videoWidth)return;
     if(context().serverId!==sessionServer){stop();update('Сервер змінився. Обери вікно гри для нового сервера.');return;}
     const frame=observedVideoFrame(video);
-    if(stream.getVideoTracks()[0]?.muted||frame===null||frame===lastVideoFrame){update('Чекаю на новий кадр гри.');return;}
-    lastVideoFrame=frame;
+    if(stream.getVideoTracks()[0]?.muted||frame===null)return;
+    try{
+      if(!thumbnail){thumbnail=document.createElement('canvas');thumbnail.width=320;thumbnail.height=160;}
+      const pixels=thumbnail.getContext('2d',{willReadFrequently:true});
+      pixels.drawImage(video,video.videoWidth*.12,video.videoHeight*.16,video.videoWidth*.7,video.videoHeight*.76,0,0,320,160);
+      gate.observe(tableFingerprint(pixels.getImageData(0,0,320,160).data));
+    }catch{update('Не вдалося отримати кадр вибраного вікна.');return;}
+    if(busy||!gate.ready())return;
+    const activeGate=gate,job=gate.begin();
     busy=true;
     try{
       const canvas=document.createElement('canvas');let scale=Math.min(1,2560/video.videoWidth,2560/video.videoHeight),image;
       do{canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);image=canvas.toDataURL('image/png');scale*=.8;}while(image.length>8*1024*1024&&canvas.width>800);
-      if(image===lastImage){update('Кадр без змін.');return;}
-      if(await consume(image,new Date().toISOString(),true))lastImage=image;
+      const readable=await consume(image,job.capturedAt,true);if(gate===activeGate)gate.finish(job,readable);
     }
-    catch(error){update(error.message);}finally{busy=false;}
+    catch(error){if(gate===activeGate)gate.finish(job,false);update(error.message);}finally{busy=false;}
   }
   async function start(){
     if(starting)return;
@@ -71,9 +78,9 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
       if(!context().serverId)throw Error('Спершу обери сервер.');
       if(!navigator.mediaDevices?.getDisplayMedia)throw Error('Цей браузер не підтримує вибір вікна. Можна зчитати зображення нижче.');
       const support=await api('/api/collector/status');if(!support.available)throw Error(support.reason||'Windows OCR недоступне.');
-      stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:1,displaySurface:'window'},audio:false});sessionServer=context().serverId;
-      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';document.body.append(video);video.srcObject=stream;lastVideoFrame=null;lastImage=null;await video.play();
-      stream.getVideoTracks()[0].addEventListener('ended',stop,{once:true});baseline=false;update('Відкрий ринок у грі.');await capture();if(stream)timer=setInterval(capture,lab?.enabled?4000:12000);
+      stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:8,max:10},displaySurface:'window'},audio:false});sessionServer=context().serverId;
+      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none';document.body.append(video);video.srcObject=stream;gate=createCaptureGate();thumbnail=null;await video.play();
+      stream.getVideoTracks()[0].addEventListener('ended',stop,{once:true});baseline=false;update('Відкрий ринок у грі.');await capture();if(stream)timer=setInterval(capture,250);
     }catch(error){if(stream)stop();update(error.name==='NotAllowedError'?'Вибір вікна скасовано':error.message);}finally{starting=false;}
   }
   function renderPending(){

@@ -26,6 +26,7 @@ for(const name of ['feedback.js','feedback.css'])files['/'+name]=name;
 for(const name of ['bargain-model.js','bargain-view.js','bargain-view.css'])files['/'+name]=name;
 files['/usage-guide.js']='usage-guide.js';
 for(const name of ['local-lab-view.js','local-lab-view.css'])files['/'+name]=name;
+files['/capture-gate.js']='capture-gate.js';
 
 /** Inject dependencies so tests never need the network or personal data. */
 export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?path.join(process.env.AION_WORKSHOP_DATA_DIR,'state.json'):new URL('./data/state.json', import.meta.url), historyPath, fetchImpl = globalThis.fetch, now = Date.now, cacheMs = 60000, timeoutMs = 20000,observationBridge=null,collectorService=null} = {}) {
