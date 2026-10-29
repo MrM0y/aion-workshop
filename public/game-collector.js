@@ -17,13 +17,13 @@ export function captureMatchesSession({capturedServer,currentServer,live=false,c
 
 /** One user-selected window, local PNG OCR, no game controls or remote uploads. */
 export function createGameCollector({api,dialog,context,onFrame,onRecords,onStatus,lab=null}={}){
-  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено',gate=createCaptureGate(),thumbnail=null,diagnostics=null,labTimer=null,labBusy=false,labRevision=null;
+  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено',gate=createCaptureGate(),thumbnail=null,diagnostics=null,labTimer=null,labBusy=false,labRevision=null,pendingFrame=null,lastQueued=null,lastApplied=null;
   const update=message=>{status=message;onStatus?.({active:Boolean(stream),message});const target=document.querySelector('#collectorStatus');if(target)target.textContent=message;const button=document.querySelector('#collectorStart');if(button)button.textContent=stream?'Зупинити зчитування':'Вибрати вікно гри';};
-  function stop(){clearInterval(timer);stream?.getTracks().forEach(track=>track.stop());stream=null;video?.remove();video=null;baseline=false;lastText.clear();update('Зчитування зупинено');}
+  function stop(){clearInterval(timer);pendingFrame=null;lastQueued=null;stream?.getTracks().forEach(track=>track.stop());stream=null;video?.remove();video=null;baseline=false;lastText.clear();update('Зчитування зупинено');}
   function reconcile(candidates){
     const visible=new Set(candidates.map(candidate=>candidate.dedupeKey));
     if(!baseline){lastText=visible;baseline=true;return;}
-    let records=context().records||[];
+    let records=context().records||[],changed=false,pendingChanged=false;
     for(const candidate of candidates){
       if(lastText.has(candidate.dedupeKey))continue;
       const key='event_'+candidate.dedupeKey+'_'+(candidate.at?Date.parse(candidate.at):Date.now());
@@ -33,22 +33,35 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
         const choices=records.filter(record=>record.status==='listed'&&record.serverId===candidate.serverId&&record.itemId===candidate.itemId&&(candidate.unitPrice===null||record.unitPrice===candidate.unitPrice)&&record.quantity-record.sales.reduce((sum,sale)=>sum+sale.quantity,0)>=candidate.quantity);
         if(choices.length===1)event={type:candidate.kind==='sold'?'sale':candidate.kind,id:key,listingId:choices[0].id,serverId:candidate.serverId,itemId:candidate.itemId,quantity:candidate.quantity,unitPrice:choices[0].unitPrice,at:candidate.at,confirmed:true};
       }
-      if(event){const result=applySaleEvents(records,[event]);if(!result.rejected.length){records=result.records;continue;}}
+      if(event){const result=applySaleEvents(records,[event]);if(!result.rejected.length){records=result.records;changed=true;continue;}}
       pending=[...pending.filter(value=>value.dedupeKey!==candidate.dedupeKey),candidate].slice(-50);
+      pendingChanged=true;
     }
-    lastText=visible;onRecords?.(records);renderPending();
+    lastText=visible;if(changed)onRecords?.(records);if(pendingChanged)renderPending();
   }
   async function consume(image,capturedAt=new Date().toISOString(),live=false){
     const selected=context(),capturedStream=stream;if(!selected.serverId)throw Error('Спершу обери сервер.');
-    update('Читаю кадр…');
-    const result=await api('/api/collector/recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image,capturedAt,language:selected.language==='ru'?'ru-RU':'en-US',serverId:selected.serverId,...(lab?.enabled?{labMarket:selected.labMarket,sampleOnly:!live}:{})})});
+    if(!live||!diagnostics)update('Читаю весь видимий список…');
+    const result=await api('/api/collector/recognize',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(20000),body:JSON.stringify({image,capturedAt,language:selected.language==='ru'?'ru-RU':'en-US',serverId:selected.serverId,...(lab?.enabled?{labMarket:selected.labMarket,sampleOnly:!live}:{})})});
     if(!captureMatchesSession({capturedServer:selected.serverId,currentServer:context().serverId,live,capturedStream,currentStream:stream}))return;
     if(result.available!==true){update(result.reason||'Windows OCR недоступне');return false;}
-    if(!result.sampleOnly)onFrame?.(result);if(live&&stream&&!result.sampleOnly)reconcile(result.candidates||[]);
+    const content=JSON.stringify([selected.serverId,result.taxRate,Object.entries(result.books||{}).map(([id,book])=>[id,book.levels,book.expiresAt])]);
+    if(!result.sampleOnly&&content!==lastApplied){onFrame?.(result);lastApplied=content;}if(live&&stream&&!result.sampleOnly)reconcile(result.candidates||[]);
     diagnostics={...result.diagnostics,sampleOnly:result.sampleOnly===true,sampleBooks:result.sampleOnly?result.books:null};const count=diagnostics?.lots??Object.values(result.books||{}).reduce((sum,book)=>sum+book.levels.length,0);
-    update(result.lab?.ok===false?result.lab.error:count?`Прочитано ${count} лотів${result.sampleOnly?' · тестове зображення':result.lab?.duplicates?' · без змін':''} · ${new Date(result.capturedAt).toLocaleTimeString('uk-UA')}`:result.reason||'Чекаю на ринок або повідомлення про продаж');
+    update(result.lab?.ok===false?result.lab.error:count?`Весь кадр: ${count} лотів${result.sampleOnly?' · тестове зображення':result.lab?.duplicates?' · без змін':''} · ${(diagnostics.durationMs/1000).toFixed(2)} с`:result.reason||'Не розпізнав список — продовжую зчитування');
     if(lab?.enabled)refreshLab();
     return count>0;
+  }
+  async function drainFrames(){
+    if(busy||!pendingFrame||!stream)return;busy=true;
+    try{
+      while(pendingFrame&&stream){
+        const frame=pendingFrame;pendingFrame=null;if(frame.stream!==stream)continue;
+        try{const readable=await consume(frame.image,frame.capturedAt,true);if(frame.gate===gate)gate.finish(frame,readable);}
+        catch(error){if(frame.gate===gate)gate.finish(frame,false);if(frame.stream===stream)update(error.name==='TimeoutError'?'OCR не відповіло — повторюю зчитування':error.message);}
+        finally{if(lastQueued===frame.signature&&!pendingFrame)lastQueued=null;}
+      }
+    }finally{busy=false;}
   }
   async function capture(){
     if(!stream||!video?.videoWidth)return;
@@ -61,15 +74,15 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
       pixels.drawImage(video,video.videoWidth*.12,video.videoHeight*.16,video.videoWidth*.7,video.videoHeight*.76,0,0,320,160);
       gate.observe(tableFingerprint(pixels.getImageData(0,0,320,160).data));
     }catch{update('Не вдалося отримати кадр вибраного вікна.');return;}
-    if(busy||!gate.ready())return;
+    if(!gate.ready())return;
     const activeGate=gate,job=gate.begin();
-    busy=true;
+    if(job.signature===lastQueued)return;
     try{
       const canvas=document.createElement('canvas');let scale=Math.min(1,2560/video.videoWidth,2560/video.videoHeight),image;
       do{canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);image=canvas.toDataURL('image/png');scale*=.8;}while(image.length>8*1024*1024&&canvas.width>800);
-      const readable=await consume(image,job.capturedAt,true);if(gate===activeGate)gate.finish(job,readable);
+      pendingFrame={...job,gate:activeGate,stream,image};lastQueued=job.signature;drainFrames();
     }
-    catch(error){if(gate===activeGate)gate.finish(job,false);update(error.message);}finally{busy=false;}
+    catch(error){if(gate===activeGate)gate.finish(job,false);update(error.message);}
   }
   async function start(){
     if(starting)return;
@@ -79,7 +92,7 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
       if(!navigator.mediaDevices?.getDisplayMedia)throw Error('Цей браузер не підтримує вибір вікна. Можна зчитати зображення нижче.');
       const support=await api('/api/collector/status');if(!support.available)throw Error(support.reason||'Windows OCR недоступне.');
       stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:8,max:10},displaySurface:'window'},audio:false});sessionServer=context().serverId;
-      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none';document.body.append(video);video.srcObject=stream;gate=createCaptureGate();thumbnail=null;await video.play();
+      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none';document.body.append(video);video.srcObject=stream;gate=createCaptureGate();thumbnail=null;pendingFrame=null;lastQueued=null;await video.play();
       stream.getVideoTracks()[0].addEventListener('ended',stop,{once:true});baseline=false;update('Відкрий ринок у грі.');await capture();if(stream)timer=setInterval(capture,250);
     }catch(error){if(stream)stop();update(error.name==='NotAllowedError'?'Вибір вікна скасовано':error.message);}finally{starting=false;}
   }
@@ -114,7 +127,7 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
     try{
       const image=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('Не вдалося відкрити зображення.'));reader.readAsDataURL(file);});
       await consume(image,new Date(file.lastModified).toISOString());
-    }catch(error){update(error.message);}finally{busy=false;input.value='';}
+    }catch(error){update(error.message);}finally{busy=false;input.value='';drainFrames();}
   }
   function show(){
     dialog('Зчитування з гри',`<p>Вибери вікно AION 2 один раз. Далі читатиму видимі лоти й повідомлення автоматично.</p><p class="muted">Ринок: ${esc(context().serverLabel||context().serverId)}. Розпізнавання — на цьому комп’ютері.</p><button type="button" class="primary" id="collectorStart">${stream?'Зупинити зчитування':'Вибрати вікно гри'}</button><p id="collectorStatus" role="status">${esc(status)}</p><label class="secondary collector-upload">Зчитати скриншот<input id="collectorImage" type="file" accept="image/png" hidden></label><div id="collectorPending"></div><details><summary>Мої підтверджені продажі · ${(context().records||[]).length} лотів</summary><p>Старий чат і зниклі оголошення не вважаються продажем. Невідомий час або неоднозначні повідомлення не потрапляють у прогноз.</p><label>Імпортувати журнал подій<input id="collectorEvents" type="file" accept="application/json,.json"></label><p id="collectorImportStatus" role="status"></p></details>`);

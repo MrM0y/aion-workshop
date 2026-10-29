@@ -7,12 +7,14 @@ import {spawn} from 'node:child_process';
 import {createAppServer} from '../server.mjs';
 import {createLocalObservationStore,createLocalObservationServer} from '../lib/local-market-node.mjs';
 import {createLocalMarketBridge} from '../lib/local-market-bridge.mjs';
+import {createScreenCollector} from '../lib/screen-collector.mjs';
+import {createOcrWorker} from '../lib/ocr-worker.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url)),directory=path.resolve(process.env.AION_LAB_DATA_DIR||path.join(root,'data','local-lab'));
 const appPort=Number(process.env.AION_LAB_APP_PORT||4180),nodePort=Number(process.env.AION_LAB_NODE_PORT||4181);
 if(![appPort,nodePort].every(port=>Number.isInteger(port)&&port>=1024&&port<=65535)||appPort===nodePort)throw Error('Некоректні порти локального стенда.');
-const servers=[];
-async function close(){await Promise.all(servers.map(server=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();})));}
+const servers=[],ocrWorker=createOcrWorker();
+async function close(){ocrWorker.close();await Promise.all(servers.map(server=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();})));}
 try{
   await mkdir(directory,{recursive:true});const statePath=path.join(directory,'state.json');
   try{await access(statePath);}catch(error){if(error.code!=='ENOENT')throw error;try{await copyFile(path.join(root,'data','state.json'),statePath,constants.COPYFILE_EXCL);}catch(copyError){if(copyError.code!=='EEXIST')throw Error('Спершу обери сервер у звичайній програмі; потім запусти локальний тест.');}}
@@ -24,7 +26,7 @@ try{
   const catalog=JSON.parse(await readFile(path.join(root,'public/data/catalog.json'),'utf8'));
   const store=await createLocalObservationStore({file:path.join(directory,'observations.json'),catalog,market}),token=randomBytes(32).toString('hex');
   const node=createLocalObservationServer({store,token}),bridge=createLocalMarketBridge({origin:`http://127.0.0.1:${nodePort}`,token,sourceId,market});
-  const app=createAppServer({statePath,observationBridge:bridge});
+  const app=createAppServer({statePath,observationBridge:bridge,collectorService:createScreenCollector({runner:options=>ocrWorker.recognize(options)})});
   for(const [server,port] of [[node,nodePort],[app,appPort]]){
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});servers.push(server);
     server.on('error',()=>{close().finally(()=>{process.exitCode=1;});});

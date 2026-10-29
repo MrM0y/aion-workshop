@@ -9,7 +9,7 @@ import {createLocalMarketBridge} from '../lib/local-market-bridge.mjs';
 import {createAppServer} from '../server.mjs';
 import {quotePurchase} from '../public/depth-cost.js';
 
-const market={region:'EU',serverId:'12309',faction:'Asmodian',exchange:'server'},catalog={items:[{id:'610531001',nameEn:'Meat',nameRu:'Мясо',icon:'/icons/610531001.png'},{id:'610531002',nameEn:'Wood'}]},token='a'.repeat(64),sourceId='source-local-test-0001';
+const market={region:'EU',serverId:'12309',faction:'Asmodian',exchange:'server'},catalog={items:[{id:'610531001',nameEn:'Meat',nameRu:'Мясо',icon:'/icons/610531001.png'},{id:'610531002',nameEn:'Wood'},{id:'610610013',nameEn:'Odyle',nameRu:'Эфир'}]},token='a'.repeat(64),sourceId='source-local-test-0001';
 const start=server=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>resolve(`http://127.0.0.1:${server.address().port}`));});
 async function fixture(t){
   const directory=await mkdtemp(path.join(tmpdir(),'aion-local-node-'));let current=Date.now();
@@ -85,4 +85,6 @@ test('OCR response passes through real local node; old test images never enter l
   f.advance(1000);const duplicate=await (await post({...body,capturedAt:new Date(f.now()).toISOString()})).json();assert.equal(duplicate.lab.duplicates,1);
   const sample=await (await post({...body,sampleOnly:true,capturedAt:'2000-01-01T00:00:00.000Z'})).json();assert.equal(sample.sampleOnly,true);assert.equal(sample.diagnostics.lots,1);assert.equal(sample.lab,undefined);assert.equal(f.store.snapshot().accepted,1);
   assert.equal((await post({...body,capturedAt:'2000-01-01T00:00:00.000Z'})).status,400);
+  lines[4]=line('Эфир',100,150);f.advance(1000);
+  const ether=await (await post({...body,capturedAt:new Date(f.now()).toISOString()})).json();assert.equal(ether.lab.ok,true);assert.equal(ether.books['610610013'].unitsTotal,10);assert.equal(ether.diagnostics.rows.length,1);assert.equal(f.store.snapshot().accepted,2);
 });
