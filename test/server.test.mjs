@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -28,6 +28,17 @@ test('local state persists atomically and survives a new store instance',async t
   assert.deepEqual(JSON.parse(await readFile(f.statePath,'utf8')).data,data);
   const {createStateStore}=await import('../lib/storage.mjs');
   assert.deepEqual((await createStateStore(f.statePath).read()).data,data);
+});
+
+test('every shipped root frontend module and stylesheet is served with the correct type',async t=>{
+  const f=await fixture(t);
+  const files=(await readdir(new URL('../public/',import.meta.url))).filter(name=>/\.(js|css)$/.test(name));
+  for(const name of files){
+    const response=await f.request('/'+name);
+    assert.equal(response.status,200,name);
+    assert.match(response.headers.get('content-type'),name.endsWith('.js')?/^text\/javascript/:/^text\/css/,name);
+    assert.ok((await response.text()).length>0,name);
+  }
 });
 
 test('foreign or missing origin cannot write; unsupported types and malformed JSON rejected',async t=>{

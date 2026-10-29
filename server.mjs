@@ -21,7 +21,7 @@ const securityHeaders = {
   'Cache-Control': 'no-store'
 };
 const files = {'/market-movement.js':'market-movement.js','/market-chart.js':'market-chart.js','/market-chart.css':'market-chart.css','/depth-cost.js':'depth-cost.js','/ranking.js':'ranking.js','/purchase-plan.js':'purchase-plan.js','/purchase-plan.css':'purchase-plan.css','/recipe-picker.js':'recipe-picker.js','/recipe-picker.css':'recipe-picker.css','/gear-view.js':'gear-view.js','/gear-view.css':'gear-view.css','/market-insights.js':'market-insights.js','/market-insights.css':'market-insights.css','/insights-model.js':'insights-model.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/engine.js':'engine.js','/state.js':'state.js','/ledger.js':'ledger.js','/tour.js':'tour.js','/tour.css':'tour.css','/help-model.js':'help-model.js','/style.css':'style.css','/market-model.js':'market-model.js','/catalog-model.js':'catalog-model.js','/gear-model.js':'gear-model.js','/gear-worker.js':'gear-worker.js','/v2.js':'v2.js','/v2.css':'v2.css','/data/catalog.json':'data/catalog.json','/data/rates.json':'data/rates.json'};
-for(const name of ['resource-routes.js','resource-policy.js','resource-batch.js','game-collector.js','sale-model.js'])files['/'+name]=name;
+for(const name of ['resource-routes.js','resource-policy.js','resource-batch.js','resource-executor.js','resource-worker.js','purchase-comparison.js','game-collector.js','sale-model.js'])files['/'+name]=name;
 for(const name of ['feedback.js','feedback.css'])files['/'+name]=name;
 for(const name of ['bargain-model.js','bargain-view.js','bargain-view.css'])files['/'+name]=name;
 files['/usage-guide.js']='usage-guide.js';
