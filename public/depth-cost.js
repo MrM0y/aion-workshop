@@ -12,6 +12,7 @@ function book(options){
   const now=options.now??Date.now(),age=options.maxAgeMs??3600000;
   const at=Date.parse(depth?.capturedAt??depth?.captured_at??'');
   if(!amount(now)||!amount(age)||!depth||!Number.isFinite(at))return {valid:false,reason:'Немає актуальних даних про кількості на цінових рівнях.'};
+  if(depth.expiresAt!=null&&(!Number.isFinite(Date.parse(depth.expiresAt))||Date.parse(depth.expiresAt)<=now))return {valid:false,reason:'Час підтверджених лотів минув.'};
   if(depth.fresh===false||wrapper?._source?.stale===true||wrapper?.sources?.depth?.stale===true||wrapper?.sources?.depth?.error||depth.stale===true||now-at>age||at-now>60000)return {valid:false,reason:'Цінові рівні застарілі або джерело недоступне.'};
   if(!Array.isArray(depth.levels))return {valid:false,reason:'Джерело не надало цінових рівнів.'};
   const merged=new Map();let total=0;

@@ -20,8 +20,8 @@ export function overlayScreenPrices(market,books={},now=Date.now()){
   const rows=new Map((market.items||[]).map(item=>[String(item.id),item]));
   for(const [id,book] of Object.entries(books)){
     const at=Date.parse(book?.capturedAt),current=rows.get(id),price=book?.levels?.[0]?.price;
-    if(book?.source?.kind!=='screen-ocr'||!Number.isFinite(at)||at>now+60000||now-at>3600000||!number(price)||Date.parse(current?.capturedAt)>=at)continue;
-    rows.set(id,{...current,id,price,listed:true,capturedAt:book.capturedAt,sourceStale:false,priceProvenance:'screen-ocr'});
+    if(book?.source?.kind!=='screen-ocr'||book.fresh===false||(book.expiresAt!=null&&(!Number.isFinite(Date.parse(book.expiresAt))||Date.parse(book.expiresAt)<=now))||!Number.isFinite(at)||at>now+60000||now-at>3600000||!number(price)||Date.parse(current?.capturedAt)>=at)continue;
+    rows.set(id,{...current,id,price,listed:true,capturedAt:book.capturedAt,expiresAt:book.expiresAt??null,sourceStale:false,priceProvenance:'screen-ocr'});
   }
   return {...market,items:[...rows.values()]};
 }
@@ -133,7 +133,7 @@ export function analyzeMarket({catalog,market,overrides={},settings={},faction='
     const marketPrice=price?.listed!==false&&number(price?.price)?price.price:null;
     const vendorPrice=buy&&number(item?.vendorPrice)?item.vendorPrice:null;
     if(vendorPrice!==null&&(marketPrice===null||vendorPrice<marketPrice))return {price:vendorPrice,source:'vendor',at:null,stale:false,reference:item.vendorPriceVerified!==true,sourceUrl:item.vendorSourceUrl||item.vendorSource?.url||null};
-    return {price:marketPrice,source:'market',at:timestamp(price?.capturedAt),stale:market._source?.stale===true||price?.sourceStale===true};
+    return {price:marketPrice,source:'market',at:timestamp(price?.capturedAt),stale:market._source?.stale===true||price?.sourceStale===true||(price?.expiresAt!=null&&(!Number.isFinite(Date.parse(price.expiresAt))||Date.parse(price.expiresAt)<=(settings.now??Date.now())))};
   }
   const router=createResourceRouter({catalog,faction,mastery,...resourcePolicy(catalog,settings),quote:id=>directQuote(id,{buy:true})});
   function quote(id,{buy=false}={}){const direct=directQuote(id,{buy});if(!buy||settings.useConversions===false)return direct;const route=router.quote(id);return route.eligible&&route.kind==='produce'&&route.price<(direct.price??Infinity)?{...direct,price:route.price,source:route.source,at:route.at,stale:route.stale,route}:direct;}

@@ -25,9 +25,10 @@ for(const name of ['resource-routes.js','resource-policy.js','resource-batch.js'
 for(const name of ['feedback.js','feedback.css'])files['/'+name]=name;
 for(const name of ['bargain-model.js','bargain-view.js','bargain-view.css'])files['/'+name]=name;
 files['/usage-guide.js']='usage-guide.js';
+for(const name of ['local-lab-view.js','local-lab-view.css'])files['/'+name]=name;
 
 /** Inject dependencies so tests never need the network or personal data. */
-export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?path.join(process.env.AION_WORKSHOP_DATA_DIR,'state.json'):new URL('./data/state.json', import.meta.url), historyPath, fetchImpl = globalThis.fetch, now = Date.now, cacheMs = 60000, timeoutMs = 20000} = {}) {
+export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?path.join(process.env.AION_WORKSHOP_DATA_DIR,'state.json'):new URL('./data/state.json', import.meta.url), historyPath, fetchImpl = globalThis.fetch, now = Date.now, cacheMs = 60000, timeoutMs = 20000,observationBridge=null,collectorService=null} = {}) {
   const store = createStateStore(statePath);
   const source = createSourceAdapter({fetchImpl, now, cacheMs, timeoutMs});
   const stateFile=statePath instanceof URL?fileURLToPath(statePath):path.resolve(statePath);
@@ -35,7 +36,7 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
   const insights=createInsightsService({source,history,now});
   const bargainHistory=createBargainHistoryService({source,history,now});
   const depthBooks=createDepthBooks({source,now});
-  const collector=createScreenCollector();
+  const collector=collectorService||createScreenCollector();
   let collectorCatalog,feedbackStore;
   return http.createServer(async (req, res) => {
     function json(status, value) {res.writeHead(status,{...securityHeaders,'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(value));}
@@ -47,6 +48,11 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
       if (req.headers.origin && req.headers.origin !== origin) throw new HttpError(403,'Запит з іншого сайту відхилено.');
       if (req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403,'Запит з іншого сайту відхилено.');
       const url = new URL(req.url, origin);
+      if(url.pathname==='/api/lab/status'){
+        if(req.method!=='GET')throw new HttpError(405,'Дозволено GET.');
+        if(!observationBridge){json(200,{enabled:false});return;}
+        try{json(200,await observationBridge.status());}catch{json(503,{enabled:true,error:'Локальний вузол недоступний. Твої попередні ціни збережені.'});}return;
+      }
       if(url.pathname==='/api/app-info'){
         if(req.method!=='GET')throw new HttpError(405,'Дозволено GET.');
         json(200,await readAppInfo());return;
@@ -81,10 +87,10 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
         if(!(req.headers['content-type']||'').toLowerCase().startsWith('application/json'))throw new HttpError(415,'Очікується JSON.');
         const body=await readJsonBody(req),serverId=String(body.serverId||'');
         if(!/^\d{1,8}$/.test(serverId))throw new HttpError(400,'Спершу обери сервер.');
-        const suppliedTime=body.capturedAt==null?now():Date.parse(body.capturedAt);
-        if(!Number.isFinite(suppliedTime)||suppliedTime>now()+60000||now()-suppliedTime>86400000)throw new HttpError(400,'Час кадру невідомий або застарілий.');
+        const sampleOnly=Boolean(observationBridge&&body.sampleOnly===true),suppliedTime=body.capturedAt==null?now():Date.parse(body.capturedAt);
+        if(!Number.isFinite(suppliedTime)||suppliedTime>now()+60000||(!sampleOnly&&now()-suppliedTime>86400000))throw new HttpError(400,'Час кадру невідомий або застарілий.');
         const capturedAt=new Date(suppliedTime).toISOString();
-        const frame=await collector.recognize(body);if(!frame.available){json(200,frame);return;}
+        const started=Date.now(),frame=await collector.recognize(body);if(!frame.available){json(200,frame);return;}
         collectorCatalog??=JSON.parse(await readFile(new URL('data/catalog.json',publicRoot),'utf8'));
         const normalize=text=>String(text||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
         const text=' '+normalize(frame.text)+' ',names=new Map();
@@ -92,7 +98,10 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
         const matched=[...new Map([...names.values()].filter(group=>new Set(group.map(item=>item.id)).size===1).flat().map(item=>[item.id,item])).values()].slice(0,40),books={},candidates=[];
         for(const item of matched){const selection={serverId,itemId:item.id,itemNames:[item.nameRu,item.nameEn].filter(Boolean),serverConfirmed:true,capturedAt};const book=parseMarketRows(frame,selection);if(book.available)books[item.id]=book;candidates.push(...parseOwnSaleEvents(frame,selection));}
         const tax=frame.text.match(/(?:Налоговая\s+ставка|Tax\s+rate|Податкова\s+ставка)\s*:?\s*(\d+(?:[.,]\d+)?)\s*%/iu),taxRate=tax?Number(tax[1].replace(',','.')):null;
-        json(200,{available:true,method:frame.method,capturedAt,books,candidates,taxRate:Number.isFinite(taxRate)&&taxRate<100?taxRate:null,reason:Object.keys(books).length?null:'Відкрий ринок із назвою предмета, цінами та кількостями.'});return;
+        let result={available:true,method:frame.method,capturedAt,books,candidates,diagnostics:{durationMs:Date.now()-started,lots:Object.values(books).reduce((sum,book)=>sum+book.levels.length,0),rejected:Object.values(books).reduce((sum,book)=>sum+(book.rejected||0),0),items:matched.filter(item=>books[item.id]).map(({id,nameEn,nameRu})=>({id,nameEn,nameRu}))},taxRate:Number.isFinite(taxRate)&&taxRate<100?taxRate:null,reason:Object.keys(books).length?null:'Відкрий ринок із назвою предмета, цінами та кількостями.'};
+        if(sampleOnly){result.sampleOnly=true;result.candidates=[];}
+        else if(observationBridge){try{result=await observationBridge.accept(result,{...body.labMarket,serverId});}catch{result.lab={ok:false,error:'Не передано у вузол. Зчитані ціни залишилися локально.'};}}
+        json(200,result);return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405,'Дозволено лише читання.');
       if(url.pathname==='/api/depth-books'){json(200,await depthBooks.read(url));return;}
