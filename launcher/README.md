@@ -4,6 +4,7 @@ Build from the project root with Windows PowerShell:
 
 ```powershell
 ./scripts/build-release.ps1 -Repository MrM0y/aion-workshop
+./scripts/test-bundle.ps1 -ArtifactDirectory ../release
 ```
 
 The build downloads pinned Node 22.23.4 from nodejs.org and verifies the archive against that release's official SHASUMS256.txt over HTTPS. It embeds node.exe, its LICENSE and a whitelist of app files into one x64 .NET Framework Windows EXE. No Node installation is required on the user's PC. Windows 10/11 includes the framework used by the launcher. The build needs the Windows framework C# compiler; no SDK or production npm dependency is added.
@@ -18,7 +19,7 @@ The EXE extracts into `%LOCALAPPDATA%/AIONWorkshop/versions/<version>` once. Int
 
 At launch the launcher checks `https://api.github.com/repos/<repository>/releases/latest`. It reads release assets named update.json and AION-Workshop-App.zip. The manifest contains version and sha256. A strictly newer stable three-part version prompts the user before download. HTTPS hosts and the configured GitHub repository are allowlisted, redirects and download sizes are bounded, and SHA256 is checked before extraction. ZIP paths, duplicates, entry counts and unpacked size are validated. A completed staging directory is moved into place before an atomic current.json pointer change. If startup fails after an update, the previous installed version is retried. A newer embedded version also installs offline, without requiring a GitHub connection. Old versions are retained for recovery; the launcher does not delete user data or install system services.
 
-GitHub Actions builds on v* tags, validates tag/package version equality, runs tests/checks, uploads assets into a draft release and then publishes it. Already published releases are immutable to this workflow. Manual workflow runs only retain artifacts. The first release and future source/tag pushes require the repository owner's normal GitHub permissions.
+GitHub Actions builds on v* tags, validates tag/package version equality, runs tests/checks, then smoke-tests the actual native EXE: extraction, bundled Node, HTTP metadata/static modules, no embedded personal data and isolated state persistence across restart. Only then does it upload assets into a draft release and publish. Already published releases are immutable to this workflow. Manual workflow runs only retain artifacts. The first release and future source/tag pushes require the repository owner's normal GitHub permissions.
 
 ## Verification commands
 

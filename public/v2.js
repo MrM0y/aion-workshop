@@ -2,6 +2,8 @@ import {resourcePolicy} from './resource-policy.js';
 import {optimizeAcquisitionBatch} from './resource-batch.js';
 import {createGameCollector} from './game-collector.js';
 import {createFeedbackController} from './feedback.js';
+import {mountBargainView} from './bargain-view.js';
+import {createUsageGuide} from './usage-guide.js';
 import {evaluateSaleForecast,observedSalePriceOptions} from './sale-model.js';
 import {sortMarketRows} from './ranking.js';
 import {optimizeBatch} from './depth-cost.js';
@@ -21,7 +23,7 @@ const pct=value=>Number.isFinite(value)?num(value,1)+'%':'—';
 const risk=value=>value>0&&value<.001?'<0,1%':value>.999&&value<1?'>99,9%':pct(value===null?null:value*100);
 const defaults={version:2,server:'',view:'market',selected:'',settings:{count:10,limit:10,budget:'',query:'',category:'',freshMinutes:60,onlyFresh:false,includeFailures:true,includeSpecial:true,includeByproducts:true,auto:true,theme:'dark',screen:'market',itemsLanguage:'ru',mastery:100,sort:'roi',confidence:.99,gearCount:1,gearInventory:{}},profiles:[],markets:{},serversCache:[]};
 let db=structuredClone(defaults),catalog,items=new Map(),market=null,analysis=null,scanning=false,saveTimer,canSave=true,gearJob=0,worker,activePicker,gearView,activeInsights,purchaseView;
-let collector,openRecipeId=null;
+let collector,openRecipeId=null,bargainView,showFirstHelp=false;
 let budgetPlans=new Map(),budgetMissing=[],budgetChecking=false,budgetSignature='',budgetTimer;
 const salesChecks=new Map();
 const booksByServer=new Map();
@@ -29,6 +31,7 @@ const booksFor=(id=db.server)=>{if(!booksByServer.has(id))booksByServer.set(id,{
 const hasBudget=()=>db.settings.budget!=='';
 const gearRequests=new Map();
 const feedback=createFeedbackController({api,context:()=>({screen:db.settings.screen,recipeId:openRecipeId||''})});
+const usageGuide=createUsageGuide({navigate:screen=>{db.settings.screen=screen;db.view=screen==='gear'?'calculator':'market';save();render();},getContext:()=>({serverId:db.server,scanning}),onComplete:({task})=>{db.help??={seenIntro:true,completed:[]};if(task&&!db.help.completed.includes(task))db.help.completed.push(task);save();}});
 const language=()=>db.settings.itemsLanguage||'ru';
 const name=id=>itemName(items.get(String(id))||{id},language());
 const server=()=>db.serversCache.find(row=>String(row.server_id)===db.server);
@@ -57,13 +60,13 @@ function conditions(){
 }
 function header(){
   const s=server();
-  $('.app-header').innerHTML=`<div class="header-inner"><a class="brand" href="/"><strong>AION</strong><span>Workshop</span></a><nav class="tabs" aria-label="Основні розділи"><button class="nav ${db.settings.screen!=='gear'?'active':''}" data-screen="market">Вигідний крафт</button><button class="nav ${db.settings.screen==='gear'?'active':''}" data-screen="gear">Спорядження</button></nav><div class="header-actions"><button class="secondary" id="marketPicker">${s?`${esc(s.region)} · ${esc(s.name)} · ${s.faction==='Elyos'?'Елійці':'Асмодіани'}`:'Обрати сервер'} ⌄</button><select id="language" aria-label="Мова назв предметів"><option value="ru" ${language()==='ru'?'selected':''}>Назви: RU</option><option value="en" ${language()==='en'?'selected':''}>Names: EN</option></select><button class="secondary" id="gameCollector">${collector?.active?'Збір із гри · працює':'Збір із гри'}</button><button class="icon-button" id="settings" aria-label="Налаштування">⚙</button></div></div>`;
+  $('.app-header').innerHTML=`<div class="header-inner"><a class="brand" href="/"><strong>AION</strong><span>Workshop</span></a><nav class="tabs" aria-label="Основні розділи"><button class="nav ${db.settings.screen==='market'?'active':''}" data-screen="market">Вигідний крафт</button><button class="nav ${db.settings.screen==='gear'?'active':''}" data-screen="gear">Спорядження</button><button class="nav ${db.settings.screen==='bargains'?'active':''}" data-screen="bargains">Дешева закупівля</button></nav><div class="header-actions"><button class="secondary" id="marketPicker">${s?`${esc(s.region)} · ${esc(s.name)} · ${s.faction==='Elyos'?'Елійці':'Асмодіани'}`:'Обрати сервер'} ⌄</button><select id="language" aria-label="Мова назв предметів"><option value="ru" ${language()==='ru'?'selected':''}>Назви: RU</option><option value="en" ${language()==='en'?'selected':''}>Names: EN</option></select><button class="secondary" id="gameCollector">${collector?.active?'Збір із гри · працює':'Збір із гри'}</button><button class="icon-button" id="settings" aria-label="Налаштування">⚙</button></div></div>`;
   document.querySelectorAll('[data-screen]').forEach(button=>button.onclick=()=>{db.settings.screen=button.dataset.screen;db.view=button.dataset.screen==='gear'?'calculator':'market';save();render();});
   $('#marketPicker').onclick=picker;$('#settings').onclick=preferences;$('#gameCollector').onclick=()=>collector.show();
   $('#language').onchange=event=>{db.settings.itemsLanguage=event.target.value;save();render();};
 }
-function render(){activePicker?.destroy();activePicker=null;gearView?.destroy();gearView=null;header();document.documentElement.dataset.theme=db.settings.theme;db.settings.screen==='gear'?renderGear():renderMarket();$('#conditions')?.addEventListener('click',preferences);}
-function budgetKey(){return JSON.stringify([db.server,db.settings.budget,db.settings.budgetEstimates,settings(),profile().overrides,profile().purchaseBooks,Object.entries(profile().screenBooks||{}).map(([id,book])=>[id,book.capturedAt]),market?._source?.fetchedAt]);}
+function render(){activePicker?.destroy();activePicker=null;gearView?.destroy();gearView=null;bargainView?.destroy();bargainView=null;header();document.documentElement.dataset.theme=db.settings.theme;db.settings.screen==='gear'?renderGear():db.settings.screen==='bargains'?renderBargains():renderMarket();$('#conditions')?.addEventListener('click',preferences);usageGuide.refresh();}
+function budgetKey(){return JSON.stringify([db.server,db.settings.screen,db.settings.budget,db.settings.budgetEstimates,settings(),profile().overrides,profile().purchaseBooks,Object.entries(profile().screenBooks||{}).map(([id,book])=>[id,book.capturedAt]),market?._source?.fetchedAt]);}
 function matchesRecipe(row){const query=(db.settings.query||'').toLocaleLowerCase();return (!db.settings.recipeFilter?.recipeIds?.length||db.settings.recipeFilter.recipeIds.includes(row.recipeId))&&(!query||db.settings.recipeFilter?.itemId||[name(row.resultId),row.nameEn,row.nameRu].some(s=>s?.toLocaleLowerCase().includes(query)));}
 function plannedRisk(row,plan){const normal=row.outputs.find(out=>out.kind==='normal'),special=row.outputs.find(out=>out.kind==='special'),net=1-(profile().settings.saleTax+profile().settings.listingTax)/100;return batchLossProbability({batch:plan.attempts,normalProbability:normal?.probability||0,specialProbability:special?.probability||0,normalNet:normal?normal.quantity*normal.price*net:0,specialNet:special?special.quantity*special.price*net:0,fixedCost:plan.attempts?plan.cashRequired/plan.attempts:0});}
 function rankRows(){
@@ -75,7 +78,7 @@ function rankRows(){
   return sortMarketRows(rows,{key:db.settings.sort||'roi',direction:db.settings.sortDirection});
 }
 async function calculateBudget(refresh=true){
-  if(!market||!analysis||!hasBudget())return;
+  if(db.settings.screen!=='market'||!market||!analysis||!hasBudget())return;
   const key=budgetKey(),id=db.server,budget=Number(db.settings.budget),sourceRows=analysis.rows,resourceOptions={catalog,faction:faction(),mastery:db.settings.mastery,...resourcePolicy(catalog,settings())};
   budgetChecking=true;budgetPlans=new Map();budgetMissing=[];renderRows();
   try{
@@ -87,7 +90,7 @@ async function calculateBudget(refresh=true){
   }catch(error){if(key===budgetKey()){budgetMissing=sourceRows.map(row=>({row,reason:error.message}));budgetSignature=key;}}
   finally{budgetChecking=false;renderRows();scheduleBudget();}
 }
-function scheduleBudget(){clearTimeout(budgetTimer);if(hasBudget()&&market&&analysis&&budgetSignature!==budgetKey()&&!budgetChecking)budgetTimer=setTimeout(()=>calculateBudget(),650);}
+function scheduleBudget(){clearTimeout(budgetTimer);if(db.settings.screen==='market'&&hasBudget()&&market&&analysis&&budgetSignature!==budgetKey()&&!budgetChecking)budgetTimer=setTimeout(()=>calculateBudget(),650);}
 async function warmSales(rows){
   if(!market)return;
   const selectedServer=db.server,snapshot=market,queue=[...new Set(rows.flatMap(row=>row.outputs.filter(output=>output.tradable!==false).map(output=>output.id)))].filter(id=>Date.now()-(salesChecks.get(selectedServer+':'+id)||0)>300000);
@@ -166,6 +169,11 @@ function dialog(title,body,wide=false){
   dialog.previous=document.activeElement;$('#closeDialog').focus();
 }
 function closeDialog(){openRecipeId=null;purchaseView?.destroy();purchaseView=null;activeInsights?.destroy();activeInsights=null;$('#modal').innerHTML='';dialog.previous?.focus();}
+function helpMenu(){
+  usageGuide.stop();closeDialog();showFirstHelp=false;db.help??={seenIntro:true,completed:[]};db.help.seenIntro=true;save();
+  dialog('Що хочеш зробити?',`<p>Вибери завдання — покажу, куди натиснути. Підказки можна закрити будь-коли.</p><div class="help-choices"><button class="secondary" data-help-task="craft">Знайти вигідний крафт</button><button class="secondary" data-help-task="gear">Порахувати спорядження</button><button class="secondary" data-help-task="bargains">Купити дешевші матеріали</button></div><button class="text-button" id="skipUsageGuide">Розберуся сам</button>`);
+  document.querySelectorAll('[data-help-task]').forEach(button=>button.onclick=()=>{const task=button.dataset.helpTask;closeDialog();usageGuide.start(task);});$('#skipUsageGuide').onclick=closeDialog;
+}
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeDialog();if(event.key==='Tab'&&$('.modal')){const elements=[...$('.modal').querySelectorAll('button,input,select,a[href]')].filter(el=>!el.disabled&&el.getClientRects().length);if(event.shiftKey&&document.activeElement===elements[0]){event.preventDefault();elements.at(-1).focus();}else if(!event.shiftKey&&document.activeElement===elements.at(-1)){event.preventDefault();elements[0].focus();}}});
 async function picker(){
   if(!db.serversCache.length){notice('Завантажую список серверів…');try{const data=await api('/api/servers');db.serversCache=data.servers||data;save();}catch(error){notice(error.message);return;}}
@@ -174,7 +182,7 @@ async function picker(){
   $('#region').value=current?.region||regions[0];$('#faction').value=current?.faction||'Elyos';
   function update(){const filtered=all.filter(s=>s.region===$('#region').value&&s.faction===$('#faction').value);$('#serverChoice').innerHTML=filtered.map(s=>`<option value="${s.server_id}">${esc(s.name)}${s.has_data?'':' · ще немає цін'}</option>`).join('');if(filtered.some(s=>String(s.server_id)===db.server))$('#serverChoice').value=db.server;}
   $('#region').onchange=update;$('#faction').onchange=update;update();
-  $('#serverForm').onsubmit=event=>{event.preventDefault();const next=$('#serverChoice').value;if(!next)return;db.server=next;market=profile().marketV2||null;db.settings.gearTarget='';save();closeDialog();recalculate();scan();};
+  $('#serverForm').onsubmit=event=>{event.preventDefault();const next=$('#serverChoice').value;if(!next)return;db.server=next;market=profile().marketV2||null;db.settings.gearTarget='';save();closeDialog();recalculate();scan().finally(()=>{if(showFirstHelp)helpMenu();});};
 }
 function preferences(){
   const p=profile().settings;
@@ -216,6 +224,21 @@ function recipeDialog(recipeId){
   const salesHost=$('#recipeSales');warmSales([row].filter(Boolean)).then(()=>{if(salesHost.isConnected)renderRecipeSales();});
   bindPrices(()=>{const scroll=$('.modal').scrollTop;renderRows();recipeDialog(recipeId);$('.modal').scrollTop=scroll;});
 }
+async function refreshBargainMarket(){
+  if(!db.server)return null;
+  const selectedServer=db.server,result=await api('/api/market?server='+encodeURIComponent(db.server));
+  if(db.server!==selectedServer)throw Error('Сервер змінився.');
+  market=overlayScreenPrices(result,profile().screenBooks);profile().marketV2=market;recalculate();save();
+  const conditionsHost=$('#bargainConditions');if(conditionsHost){conditionsHost.innerHTML=conditions();$('#conditions')?.addEventListener('click',preferences);}
+  return market;
+}
+function renderBargains(){
+  $('#content').innerHTML=`<div id="bargainConditions">${conditions()}</div><div id="bargainWorkspace"></div>`;
+  bargainView=mountBargainView($('#bargainWorkspace'),{catalog,market,server:db.server,api,language,budget:db.settings.bargainBudget??'',purpose:db.settings.bargainPurpose||'craft',onPurpose:value=>{db.settings.bargainPurpose=value;save();},saleTax:profile().settings.saleTax+profile().settings.listingTax,books:{...booksFor(),...profile().screenBooks},onBudget:value=>{db.settings.bargainBudget=value;save();},onRefreshMarket:refreshBargainMarket,onInspect:id=>{
+    dialog(name(id),`<div class="bargain-inspect-label">${itemLabel(id)}</div><div id="bargainInsights"></div>`,true);
+    activeInsights=mountMarketInsights($('#bargainInsights'),{server:db.server,itemId:id,api,price:quote(id).price});
+  }});
+}
 function calculateGear(options){
   if(!worker){worker=new Worker('/gear-worker.js',{type:'module'});worker.onmessage=({data})=>{const request=gearRequests.get(data.id);if(!request)return;gearRequests.delete(data.id);data.error?request.reject(Error(data.error)):request.resolve(data);};worker.onerror=()=>{for(const request of gearRequests.values())request.reject(Error('Не вдалося завершити розрахунок.'));gearRequests.clear();worker.terminate();worker=null;};}
   return new Promise((resolve,reject)=>{const id=++gearJob;gearRequests.set(id,{resolve,reject});worker.postMessage({id,options});});
@@ -230,16 +253,16 @@ function initializeCollector(){
     const p=profile();p.screenBooks??={};mergePurchaseBooks(booksFor(),result.books||{});
     for(const [id,book] of Object.entries(result.books||{})){if(Date.parse(p.screenBooks[id]?.capturedAt)>Date.parse(book.capturedAt))continue;p.screenBooks[id]=book;const metadata=items.get(id),current=market?.items.find(item=>String(item.id)===id);if(market&&book.levels.length&&!(Date.parse(current?.capturedAt)>Date.parse(book.capturedAt))){const observed={id,name:metadata?.nameEn||metadata?.nameRu||id,price:book.levels[0].price,listed:true,capturedAt:book.capturedAt,sourceStale:false,priceProvenance:'screen-ocr'};if(current)Object.assign(current,observed);else market.items.push(observed);}}
     if(result.taxRate!==null&&Number.isFinite(result.taxRate)&&result.taxRate!==p.settings.saleTax&&!(Date.parse(p.settings.taxObservedAt)>Date.parse(result.capturedAt))){p.settings.saleTax=result.taxRate;p.settings.taxConfirmed=true;p.settings.taxSource='screen-ocr';p.settings.taxObservedAt=result.capturedAt;toast('Податок із гри: '+num(result.taxRate)+'%');}
-    save();recalculate();if(openRecipeId&&purchaseView){const next=analysis?.rows.find(row=>row.recipeId===openRecipeId);if(next)purchaseView.updateRow(next,p.settings);}if(!$('#modal')?.children.length){render();}else renderRows();
+    save();recalculate();if(openRecipeId&&purchaseView){const next=analysis?.rows.find(row=>row.recipeId===openRecipeId);if(next)purchaseView.updateRow(next,p.settings);}if(db.settings.screen==='bargains'){bargainView?.update({market,books:{...booksFor(),...p.screenBooks},saleTax:p.settings.saleTax+p.settings.listingTax});}else if(!$('#modal')?.children.length){render();}else renderRows();
   }});
 }
 async function boot(){
   document.body.innerHTML='<header class="app-header"></header><main id="main"><div id="status" class="status" role="status" aria-live="polite">Завантажую майстерню…</div><section id="content"></section><footer><span>AION Workshop · Усі суми в Kinah</span><span>Дані на цьому пристрої · Прибуток не гарантовано</span></footer></main><div id="modal"></div><div id="toast" role="status" aria-live="polite"></div>';
-  const feedbackButton=document.createElement('button');feedbackButton.type='button';feedbackButton.id='feedback';feedbackButton.className='feedback-launch';feedbackButton.setAttribute('aria-label','Залишити відгук');feedbackButton.textContent='Відгук';feedbackButton.onclick=()=>feedback.start();document.body.append(feedbackButton);
+  const feedbackButton=document.createElement('button');feedbackButton.type='button';feedbackButton.id='feedback';feedbackButton.className='feedback-launch';feedbackButton.setAttribute('aria-label','Залишити відгук');feedbackButton.textContent='Відгук';feedbackButton.onclick=()=>{usageGuide.stop();feedback.start();};document.body.append(feedbackButton);const helpButton=document.createElement('button');helpButton.type='button';helpButton.id='usageHelp';helpButton.className='usage-help-launch';helpButton.textContent='?';helpButton.setAttribute('aria-label','Покажи, як користуватися');helpButton.title='Покажи, як користуватися';helpButton.onclick=helpMenu;document.body.append(helpButton);
   let disk=null,local=null,loadError='';
   try{disk=(await api('/api/state')).data;}catch(error){canSave=false;loadError=error.message;}
   try{local=JSON.parse(localStorage.getItem('aion-workshop-v2')||'null');}catch{canSave=false;loadError+=' Локальні дані пошкоджені.';}
-  const recovered=resolveSavedState(disk,local);
+  const recovered=resolveSavedState(disk,local);showFirstHelp=!recovered.state;
   if(recovered.errors.length)loadError+=' '+recovered.errors.map(error=>`${error.source==='disk'?'Файл':'Браузер'}: ${error.message}`).join(' ');
   if(recovered.state){db=recovered.state;db.settings={...defaults.settings,...db.settings};}else if(recovered.hasInvalid){canSave=false;loadError+=' Збережені дані не вдалося прочитати. Файл не перезаписано.';}
   try{
@@ -258,8 +281,8 @@ setInterval(async()=>{
   try{
     const health=await api(`/api/health?server=${encodeURIComponent(selectedServer)}`);
     if(db.server!==selectedServer)return;
-    if(!health._source?.stale&&Date.parse(health.latest_snapshot_at)>(Date.parse(market.capturedAt)||0))await scan();
-    else if(db.settings.screen!=='gear'){analysis=analyzeMarket({catalog,market,overrides:profile().overrides,settings:settings(),faction:faction()});renderRows();}
+    if(!health._source?.stale&&Date.parse(health.latest_snapshot_at)>(Date.parse(market.capturedAt)||0)){if(db.settings.screen==='bargains'){await refreshBargainMarket();bargainView?.update({market,books:{...booksFor(),...profile().screenBooks},saleTax:profile().settings.saleTax+profile().settings.listingTax});}else await scan();}
+    else if(db.settings.screen==='market'){analysis=analyzeMarket({catalog,market,overrides:profile().overrides,settings:settings(),faction:faction()});renderRows();}
   }catch{/* Keep the observed timestamp; a failed refresh does not make old prices new. */}
   finally{checkingSnapshot=false;}
 },60000);

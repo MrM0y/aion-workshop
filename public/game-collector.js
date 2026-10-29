@@ -1,9 +1,21 @@
 import {applySaleEvents} from './sale-model.js';
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
+/** A paused capture must not turn an old image into a newly observed market book. */
+export function observedVideoFrame(video){
+  if(!video||video.paused||video.readyState<2)return null;
+  const frames=video.getVideoPlaybackQuality?.().totalVideoFrames;
+  if(Number.isFinite(frames)&&frames>0)return 'frame:'+frames;
+  return Number.isFinite(video.currentTime)?'time:'+video.currentTime:null;
+}
+
+export function captureMatchesSession({capturedServer,currentServer,live=false,capturedStream,currentStream}){
+  return Boolean(capturedServer)&&capturedServer===currentServer&&(!live||Boolean(capturedStream)&&capturedStream===currentStream);
+}
+
 /** One user-selected window, local PNG OCR, no game controls or remote uploads. */
 export function createGameCollector({api,dialog,context,onFrame,onRecords,onStatus}={}){
-  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено';
+  let stream,video,timer,busy=false,starting=false,sessionServer='',lastText=new Set(),baseline=false,pending=[],status='Не запущено',lastVideoFrame=null;
   const update=message=>{status=message;onStatus?.({active:Boolean(stream),message});const target=document.querySelector('#collectorStatus');if(target)target.textContent=message;const button=document.querySelector('#collectorStart');if(button)button.textContent=stream?'Зупинити зчитування':'Вибрати вікно гри';};
   function stop(){clearInterval(timer);stream?.getTracks().forEach(track=>track.stop());stream=null;video?.remove();video=null;baseline=false;lastText.clear();update('Зчитування зупинено');}
   function reconcile(candidates){
@@ -24,22 +36,26 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
     }
     lastText=visible;onRecords?.(records);renderPending();
   }
-  async function consume(image,capturedAt=new Date().toISOString()){
-    const selected=context();if(!selected.serverId)throw Error('Спершу обери сервер.');
+  async function consume(image,capturedAt=new Date().toISOString(),live=false){
+    const selected=context(),capturedStream=stream;if(!selected.serverId)throw Error('Спершу обери сервер.');
     const result=await api('/api/collector/recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image,capturedAt,language:selected.language==='ru'?'ru-RU':'en-US',serverId:selected.serverId})});
+    if(!captureMatchesSession({capturedServer:selected.serverId,currentServer:context().serverId,live,capturedStream,currentStream:stream}))return;
     if(result.available!==true){update(result.reason||'Windows OCR недоступне');return;}
-    onFrame?.(result);if(stream)reconcile(result.candidates||[]);
+    onFrame?.(result);if(live&&stream)reconcile(result.candidates||[]);
     const count=Object.values(result.books||{}).reduce((sum,book)=>sum+book.levels.length,0);
     update(count?`Прочитано ${count} лотів · ${new Date(result.capturedAt).toLocaleTimeString('uk-UA')}`:result.reason||'Чекаю на ринок або повідомлення про продаж');
   }
   async function capture(){
     if(busy||!stream||!video?.videoWidth)return;
     if(context().serverId!==sessionServer){stop();update('Сервер змінився. Обери вікно гри для нового сервера.');return;}
+    const frame=observedVideoFrame(video);
+    if(stream.getVideoTracks()[0]?.muted||frame===null||frame===lastVideoFrame){update('Чекаю на новий кадр гри.');return;}
+    lastVideoFrame=frame;
     busy=true;
     try{
       const canvas=document.createElement('canvas');let scale=Math.min(1,2560/video.videoWidth,2560/video.videoHeight),image;
       do{canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);image=canvas.toDataURL('image/png');scale*=.8;}while(image.length>8*1024*1024&&canvas.width>800);
-      await consume(image);
+      await consume(image,new Date().toISOString(),true);
     }
     catch(error){update(error.message);}finally{busy=false;}
   }
@@ -51,7 +67,7 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
       if(!navigator.mediaDevices?.getDisplayMedia)throw Error('Цей браузер не підтримує вибір вікна. Можна зчитати зображення нижче.');
       const support=await api('/api/collector/status');if(!support.available)throw Error(support.reason||'Windows OCR недоступне.');
       stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:1,displaySurface:'window'},audio:false});sessionServer=context().serverId;
-      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';document.body.append(video);video.srcObject=stream;await video.play();
+      video=document.createElement('video');video.muted=true;video.setAttribute('playsinline','');video.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';document.body.append(video);video.srcObject=stream;lastVideoFrame=null;await video.play();
       stream.getVideoTracks()[0].addEventListener('ended',stop,{once:true});baseline=false;await capture();timer=setInterval(capture,12000);update('Зчитування працює · відкрий ринок у грі');
     }catch(error){if(stream)stop();update(error.name==='NotAllowedError'?'Вибір вікна скасовано':error.message);}finally{starting=false;}
   }

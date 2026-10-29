@@ -11,6 +11,7 @@ import {createDepthBooks} from './lib/depth-books.mjs';
 import {createScreenCollector,parseMarketRows,parseOwnSaleEvents} from './lib/screen-collector.mjs';
 import {readAppInfo} from './lib/app-info.mjs';
 import {createFeedbackStore} from './lib/feedback.mjs';
+import {createBargainHistoryService} from './lib/bargain-history.mjs';
 
 const publicRoot = new URL('./public/', import.meta.url);
 const securityHeaders = {
@@ -22,6 +23,8 @@ const securityHeaders = {
 const files = {'/market-movement.js':'market-movement.js','/market-chart.js':'market-chart.js','/market-chart.css':'market-chart.css','/depth-cost.js':'depth-cost.js','/ranking.js':'ranking.js','/purchase-plan.js':'purchase-plan.js','/purchase-plan.css':'purchase-plan.css','/recipe-picker.js':'recipe-picker.js','/recipe-picker.css':'recipe-picker.css','/gear-view.js':'gear-view.js','/gear-view.css':'gear-view.css','/market-insights.js':'market-insights.js','/market-insights.css':'market-insights.css','/insights-model.js':'insights-model.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/engine.js':'engine.js','/state.js':'state.js','/ledger.js':'ledger.js','/tour.js':'tour.js','/tour.css':'tour.css','/help-model.js':'help-model.js','/style.css':'style.css','/market-model.js':'market-model.js','/catalog-model.js':'catalog-model.js','/gear-model.js':'gear-model.js','/gear-worker.js':'gear-worker.js','/v2.js':'v2.js','/v2.css':'v2.css','/data/catalog.json':'data/catalog.json','/data/rates.json':'data/rates.json'};
 for(const name of ['resource-routes.js','resource-policy.js','resource-batch.js','game-collector.js','sale-model.js'])files['/'+name]=name;
 for(const name of ['feedback.js','feedback.css'])files['/'+name]=name;
+for(const name of ['bargain-model.js','bargain-view.js','bargain-view.css'])files['/'+name]=name;
+files['/usage-guide.js']='usage-guide.js';
 
 /** Inject dependencies so tests never need the network or personal data. */
 export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?path.join(process.env.AION_WORKSHOP_DATA_DIR,'state.json'):new URL('./data/state.json', import.meta.url), historyPath, fetchImpl = globalThis.fetch, now = Date.now, cacheMs = 60000, timeoutMs = 20000} = {}) {
@@ -30,6 +33,7 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
   const stateFile=statePath instanceof URL?fileURLToPath(statePath):path.resolve(statePath);
   const history=createHistoryStore(historyPath||stateFile+'.history',{now});
   const insights=createInsightsService({source,history,now});
+  const bargainHistory=createBargainHistoryService({source,history,now});
   const depthBooks=createDepthBooks({source,now});
   const collector=createScreenCollector();
   let collectorCatalog,feedbackStore;
@@ -92,6 +96,7 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405,'Дозволено лише читання.');
       if(url.pathname==='/api/depth-books'){json(200,await depthBooks.read(url));return;}
+      if(url.pathname==='/api/bargain-history'){json(200,await bargainHistory.read(url));return;}
       if(url.pathname==='/api/insights'){json(200,await insights.read(url));return;}
       if (url.pathname === '/api/sources') {json(200,sourceCapabilities);return;}
       if (url.pathname === '/api/market') {json(200,await source.readMarket(url));return;}

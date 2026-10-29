@@ -28,6 +28,9 @@ jobs:
       - name: Build single-file launcher
         shell: powershell
         run: ./scripts/build-release.ps1 -Repository '${{ github.repository }}' -OutputDirectory release
+      - name: Smoke-test bundled runtime and isolated data
+        shell: powershell
+        run: ./scripts/test-bundle.ps1 -ArtifactDirectory release
       - name: Keep build artifacts
         uses: actions/upload-artifact@v4
         with:

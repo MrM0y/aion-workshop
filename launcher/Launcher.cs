@@ -121,7 +121,7 @@ internal static class Launcher {
     }
     static void Extract(Stream input,string destination) {
         string root=Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
-        Directory.CreateDirectory(root);long total=0;var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Directory.CreateDirectory(root);long total=0;int extracted=0;var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using(var zip=new ZipArchive(input,ZipArchiveMode.Read,true)) {
             if(zip.Entries.Count>20000)throw new Exception("Забагато файлів в оновленні.");
             foreach(var entry in zip.Entries){
@@ -130,6 +130,7 @@ internal static class Launcher {
                 if(entry.Length>200L*1024*1024||(total+=entry.Length)>1024L*1024*1024)throw new Exception("Архів перевищує ліміт розміру.");
                 if(String.IsNullOrEmpty(entry.Name)){Directory.CreateDirectory(target);continue;}
                 Directory.CreateDirectory(Path.GetDirectoryName(target));using(var source=entry.Open())using(var file=new FileStream(target,FileMode.CreateNew,FileAccess.Write))source.CopyTo(file);
+                if(Splash!=null&&++extracted%50==0)Say("Розпаковую файли: "+extracted+" / "+zip.Entries.Count+"…");
             }
         }
         if(!File.Exists(Path.Combine(root,"app","server.mjs"))||!File.Exists(Path.Combine(root,"runtime","node.exe")))throw new Exception("Оновлення не містить потрібних файлів.");
