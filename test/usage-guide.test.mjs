@@ -9,10 +9,10 @@ test('v2 guide covers all three real tasks and reads existing controls without i
   const craft=usageGuideSteps('craft',{getContext:()=>context,document:fixture(['#scan','.toolbar','#content'])});
   const gear=usageGuideSteps('gear',{getContext:()=>context,document:fixture(['.gv-target','.gv-form','#content'])});
   const bargains=usageGuideSteps('bargains',{getContext:()=>context,document:fixture(['[data-bargain-purpose]','#content'])});
-  assert.equal(craft.length,5);assert.equal(gear.length,5);assert.equal(bargains.length,5);
+  assert.equal(craft.length,5);assert.equal(gear.length,4);assert.equal(bargains.length,5);
   assert.equal(craft[0].selector(),'#scan');assert.equal(gear[0].selector(),'.gv-target');assert.equal(bargains[0].selector(),'[data-bargain-purpose]');
   assert.equal(JSON.stringify(context),before);
-  for(const step of [...craft,...gear,...bargains]){assert.equal(step.onAction,undefined);assert.equal(step.ready,undefined);assert.ok(step.text.length<300);assert.doesNotMatch(step.text,/свій рецепт|плата за спробу/);}
+  for(const step of [...craft,...gear,...bargains]){assert.equal(step.onAction,undefined);assert.equal(step.ready,undefined);assert.ok(step.text.length<300);assert.doesNotMatch(step.text,/свій рецепт|плата за спробу|Уже маю|Мої готові речі/);}
 });
 
 test('catalogue dropdown and missing market data leave a usable target instead of trapping the user',()=>{

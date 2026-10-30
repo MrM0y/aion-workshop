@@ -91,3 +91,11 @@ test('unknown quantities sort after known savings and risk-free profit is never 
   assert.equal(sorted[0].id,'1');assert.equal(known.purchase.executionGuaranteed,false);
   assert.equal(bargainPurchase({depth,maxUnitPrice:85,referencePrice:100,budget:NaN,now}).available,false);
 });
+
+ test('column sorting toggles price, reference and quantity with unknown values last',()=>{
+  const rows=[{id:'1',price:70,reference:{price:100},purchase:{quantity:8,cost:560}},{id:'2',price:40,reference:{price:80},purchase:{quantity:3,cost:120}},{id:'3',price:null,reference:{price:null},purchase:{}}];
+  for(const [key,first] of [['price','2'],['reference','2'],['quantity','2'],['capital','2']]){
+    assert.deepEqual(sortBargains(rows,key,'asc').map(row=>row.id),[first,'1','3']);
+    assert.deepEqual(sortBargains(rows,key,'desc').map(row=>row.id),['1',first,'3']);
+  }
+});

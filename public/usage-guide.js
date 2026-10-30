@@ -15,14 +15,13 @@ export function usageGuideSteps(task,{getContext=()=>({}),document:doc=globalThi
   if(task==='craft')steps.push(
     step('craft-scan','Знайдемо вигідний крафт','Натисни «Знайти вигідне». Оновлю ціни й порівняю рецепти. Якщо джерело затримується, біля цін залишиться їхній справжній час.',target('#scan','#content'),{advanceWhen:()=>!getContext().scanning&&has('.ranking tbody tr')}),
     step('craft-choose','Знайди потрібну річ','Можеш вписати назву або натиснути поле й пройти категоріями. Потім відкрий рецепт у списку.',chooser('#modal .modal','.toolbar','#content'),{advanceWhen:()=>has('#purchaseWorkspace')}),
-    step('craft-budget','Скільки хочеш зробити?','У відкритому рецепті задай кількість спроб або бюджет. Не знаєш поки — залиш як є. Для підбору натисни «Знайти вигідну закупівлю».',target('.pp-controls','#modal .modal','#ranked','#content')),
+    step('craft-budget','Скільки хочеш зробити?','У відкритому рецепті задай кількість спроб або бюджет. Не знаєш поки — залиш як є. Натисни «Розрахувати».',target('.pp-controls','#modal .modal','#ranked','#content')),
     step('craft-result','Ось що треба купити','У підсумку видно лоти, кількості й усю суму. Якщо кількостей у джерелі немає, їх не вигадую. Прибуток залежить від того, чи продаси готовий товар.',target('.pp-state','#purchaseWorkspace','#modal .modal','#ranked','#content')),
-    step('craft-market','Перевір ціну й попит','Нижче в рецепті є графік ринку та доступні дані про продажі. Велика різниця в ціні ще не означає швидкий продаж.',target('.market-insights','#recipeSales','#modal .modal','#content'))
+    step('craft-market','Перевір ціну й попит','Відкрий «Історія ціни» внизу рецепта. Велика різниця в ціні ще не означає швидкий продаж.',target('.market-insights','#recipeSales','#modal .modal','#content'))
   );
   if(task==='gear')steps.push(
     step('gear-target','Яку річ хочеш отримати?','Обери зброю, броню чи прикрасу. Можна шукати за назвою або відкрити категорії.',chooser('.gv-target','#gearWorkspace','#content')),
-    step('gear-start','З чого починаємо?','Вибери початкову річ. Якщо вже маєш її — познач «Уже маю» й вкажи кількість. Якщо нічого немає, починай із сировини.',target('.gv-form','#gearWorkspace','#content')),
-    step('gear-stock','Що вже лежить у тебе?','У плитках можна вказати наявні матеріали, а в «Мої готові речі» — проміжні предмети. Це зменшить суму, яку ще треба витратити.',target('.gv-workspace','#gearWorkspace','#content')),
+    step('gear-start','З чого починаємо?','Вибери, з чого почати: із сировини чи з купівлі проміжної речі.',target('.gv-form','#gearWorkspace','#content')),
     step('gear-calculate','Порахуємо невдалі спроби','Натисни «Розрахувати». Вибір «У 99 зі 100 випадків» означає більший запас грошей на невдачі; абсолютної гарантії випадкового крафту немає.',target('.gv-form','#gearWorkspace','#content')),
     step('gear-result','Загальна сума — тут','Вгорі підсумку будуть середні витрати й бюджет із запасом. Поруч — матеріали та скільки ще купити. Якщо бракує шансів або цін, покажу це замість вигаданої суми.',target('.gv-summary','#gearWorkspace','#content'))
   );

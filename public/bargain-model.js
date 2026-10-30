@@ -79,7 +79,7 @@ export function evaluateBargain({item,current,insights,serverId,budget=null,purp
   return {...result,candidate:true,purchase,reasonCode:null,reason:null};
 }
 
-export function sortBargains(rows,key='discount'){
-  const value=row=>key==='saving'?row.purchase?.saving:key==='capital'?row.purchase?.cost:key==='volume'?row.liquidity?.unitsSold:row.discount;
-  return [...rows].sort((a,b)=>{const av=value(a),bv=value(b),ak=amount(av),bk=amount(bv);return ak!==bk?(ak?-1:1):ak&&av!==bv?(av-bv)*(key==='capital'?1:-1):a.id.localeCompare(b.id,'en',{numeric:true});});
+export function sortBargains(rows,key='discount',direction=key==='capital'?'asc':'desc'){
+  const value=row=>key==='saving'?row.purchase?.saving:key==='capital'?row.purchase?.cost:key==='volume'?row.liquidity?.unitsSold:key==='price'?row.price:key==='reference'?row.reference?.price:key==='quantity'?row.purchase?.quantity:row.discount;
+  return [...rows].sort((a,b)=>{const av=value(a),bv=value(b),ak=amount(av),bk=amount(bv);return ak!==bk?(ak?-1:1):ak&&av!==bv?(av-bv)*(direction==='asc'?1:-1):a.id.localeCompare(b.id,'en',{numeric:true});});
 }
