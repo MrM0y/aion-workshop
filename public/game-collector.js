@@ -78,7 +78,7 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
     try{
       if(!thumbnail){thumbnail=document.createElement('canvas');thumbnail.width=320;thumbnail.height=160;}
       const pixels=thumbnail.getContext('2d',{willReadFrequently:true});
-      pixels.drawImage(video,video.videoWidth*.12,video.videoHeight*.16,video.videoWidth*.7,video.videoHeight*.76,0,0,320,160);
+      pixels.drawImage(video,video.videoWidth*.10,video.videoHeight*.16,video.videoWidth*.89,video.videoHeight*.76,0,0,320,160);
       gate.observe(tableFingerprint(pixels.getImageData(0,0,320,160).data));
     }catch{update('Не вдалося отримати кадр вибраного вікна.');return;}
     if(!gate.ready())return;
