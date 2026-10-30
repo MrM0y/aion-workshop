@@ -1,5 +1,15 @@
 # Windows launcher
 
+## Windows Setup and partial updates (3.5.0)
+
+`AION-Workshop-Setup.exe` installs a small launcher, the bundled runtime and app into the user's chosen folder, creates a Start-menu shortcut (optional desktop shortcut), and registers the standard uninstaller. Setup uses Inno Setup without administrative privileges. Settings stay in `%LOCALAPPDATA%/AIONWorkshop/data`, independently of the installation folder; `--profile-dir` continues to isolate QA data. Install the new Setup once to replace an older portable launcher; updating only its app ZIP cannot replace that old executable's updater.
+
+Build with `scripts/build-release.ps1`, then `scripts/build-setup.ps1 -ArtifactDirectory ../release`. GitHub Windows runners supply the Inno compiler. `scripts/test-setup.ps1` verifies installation into a separate folder, the actual installed launcher/backend, and uninstallation while keeping data.
+
+The release adds `files.json`, bound by SHA256 in `update.json`. Each indexed file includes its uncompressed hash/size and the exact compressed ZIP range. The launcher verifies local files, copies matching files into a fresh version directory, and uses validated HTTP 206 ranges to fetch only changed/missing files. Each downloaded file is bounded, decompressed and hashed before activation. This works across skipped versions and repairs a modified local file; it does not need a delta for each pair of versions. Old versions stay available for startup rollback. A server/proxy that does not honor the exact range causes a safe failure, leaving the old version intact. Older releases without an index retain the verified full-package fallback.
+
+`scripts/test-indexed-update.ps1` tests the native updater, including reusing unchanged files, fetching only changed bytes, hash failure, unsafe paths and malformed entries. The standard GitHub release workflow tests the native EXE and installer before publishing either.
+
 Build from the project root with Windows PowerShell:
 
 ```powershell

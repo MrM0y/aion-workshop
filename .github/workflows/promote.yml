@@ -1,0 +1,60 @@
+name: Publish verified Windows build
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Windows release verification run
+        required: true
+      tag:
+        description: Release tag matching the verified package
+        required: true
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Validate source build
+        id: source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:SOURCE_RUN -notmatch '^\d+$' -or $env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid run or tag.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.status -ne 'completed' -or $run.path -ne '.github/workflows/release.yml' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Only this repository successful Windows verification builds can be published.' }
+          "sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
+      - uses: actions/download-artifact@v4
+        with:
+          name: AION-Workshop-Windows
+          path: release
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify and publish existing artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          $manifest = Get-Content release/update.json -Raw | ConvertFrom-Json
+          if ("v$($manifest.version)" -ne $env:RELEASE_TAG -or $manifest.repository -ne $env:GITHUB_REPOSITORY) { throw 'Artifact version/repository mismatch.' }
+          foreach ($line in Get-Content release/SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9.-]+)$') { throw 'Invalid checksum list.' }
+            if ((Get-FileHash -LiteralPath "release/$($Matches[2])" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) { throw 'Artifact checksum mismatch.' }
+          }
+          foreach ($name in @('AION-Workshop.exe','AION-Workshop-Setup.exe','AION-Workshop-App.zip','update.json','files.json','SHA256SUMS.txt')) { if (!(Test-Path -LiteralPath "release/$name")) { throw "Missing artifact: $name" } }
+          if ((Get-FileHash release/AION-Workshop-App.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.sha256 -or (Get-FileHash release/files.json -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.filesSha256) { throw 'Manifest checksum mismatch.' }
+          $existing = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq '.isDraft' 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existing -eq 'false') { throw 'Published releases are immutable.' }
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --draft --title "AION Workshop $env:RELEASE_TAG" --notes 'Завантаж AION-Workshop-Setup.exe. Вибери папку та встанови. Наступні оновлення завантажують лише змінені файли; налаштування зберігаються. Для переходу зі старого portable launcher встанови Setup один раз.'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $env:RELEASE_TAG release/AION-Workshop.exe release/AION-Workshop-Setup.exe release/AION-Workshop-App.zip release/update.json release/files.json release/SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
