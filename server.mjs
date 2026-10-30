@@ -9,6 +9,7 @@ import {createHistoryStore} from './lib/history.mjs';
 import {createInsightsService} from './lib/insights.mjs';
 import {createDepthBooks} from './lib/depth-books.mjs';
 import {createScreenCollector,parseMarketRows,parseOwnSaleEvents,screenItemCandidates} from './lib/screen-collector.mjs';
+import {createOcrWorker} from './lib/ocr-worker.mjs';
 import {readAppInfo} from './lib/app-info.mjs';
 import {createFeedbackStore} from './lib/feedback.mjs';
 import {createBargainHistoryService} from './lib/bargain-history.mjs';
@@ -37,9 +38,10 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
   const insights=createInsightsService({source,history,now});
   const bargainHistory=createBargainHistoryService({source,history,now});
   const depthBooks=createDepthBooks({source,now});
-  const collector=collectorService||createScreenCollector();
+  const ocrWorker=collectorService?null:createOcrWorker();
+  const collector=collectorService||createScreenCollector({runner:options=>ocrWorker.recognize(options)});
   let collectorCatalog,feedbackStore;
-  return http.createServer(async (req, res) => {
+  const server=http.createServer(async (req, res) => {
     function json(status, value) {res.writeHead(status,{...securityHeaders,'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(value));}
     try {
       const port = res.socket.localPort;
@@ -118,6 +120,8 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
       json(status,{error:status===500?'Не вдалося прочитати або зберегти локальні дані. Перевірте доступ до папки data та резервну копію.':error.code==='ENOENT'?'Файл не знайдено.':error.message});
     }
   });
+  server.once('close',()=>ocrWorker?.close());
+  return server;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

@@ -64,6 +64,9 @@ function Start-TestBackend {
 try{
   $extract=Start-Process -FilePath $exe -ArgumentList '--extract-only',('"'+$testRoot+'"') -Wait -PassThru -WindowStyle Hidden
   if($extract.ExitCode -ne 0){throw "Native extraction failed: $($extract.ExitCode)"}
+  foreach($required in @('lib/ocr-worker.mjs','scripts/ocr-screen-worker.ps1','public/capture-gate.js')){
+    if(!(Test-Path -LiteralPath (Join-Path $testRoot ('app/'+$required)))){throw "Missing scanner component: $required"}
+  }
   $nodeVersion=(& $node --version).Trim()
   if($LASTEXITCODE -ne 0 -or $nodeVersion -ne ('v'+$manifest.nodeVersion)){throw 'Bundled Node version mismatch.'}
   $running=Start-TestBackend

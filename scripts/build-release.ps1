@@ -54,6 +54,7 @@ try {
       }
     }
     [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($payload,(Join-Path $project 'scripts/ocr-screen.ps1'),'app/scripts/ocr-screen.ps1',[IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($payload,(Join-Path $project 'scripts/ocr-screen-worker.ps1'),'app/scripts/ocr-screen-worker.ps1',[IO.Compression.CompressionLevel]::Optimal) | Out-Null
   } finally { $payload.Dispose() }
   $hash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
   [IO.File]::WriteAllText((Join-Path $stage 'launcher.json'),(@{version=$version;repository=$Repository;payloadSha256=$hash}|ConvertTo-Json -Compress),(New-Object Text.UTF8Encoding $false))
