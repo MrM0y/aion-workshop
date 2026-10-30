@@ -8,7 +8,7 @@ import {createSourceAdapter, sourceCapabilities} from './lib/source.mjs';
 import {createHistoryStore} from './lib/history.mjs';
 import {createInsightsService} from './lib/insights.mjs';
 import {createDepthBooks} from './lib/depth-books.mjs';
-import {createScreenCollector,parseMarketRows,parseOwnSaleEvents,screenItemCandidates} from './lib/screen-collector.mjs';
+import {createScreenCollector,parseMarketRows,parseOwnSaleEvents,screenItemCandidates,parseMarketOverview} from './lib/screen-collector.mjs';
 import {createOcrWorker} from './lib/ocr-worker.mjs';
 import {readAppInfo} from './lib/app-info.mjs';
 import {createFeedbackStore} from './lib/feedback.mjs';
@@ -95,12 +95,15 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
         const capturedAt=new Date(suppliedTime).toISOString();
         const started=Date.now(),frame=await collector.recognize(body);if(!frame.available){json(200,frame);return;}
         collectorCatalog??=JSON.parse(await readFile(new URL('data/catalog.json',publicRoot),'utf8'));
-        const matched=screenItemCandidates(collectorCatalog,frame.text),books={},candidates=[];
+        const matched=screenItemCandidates(collectorCatalog,frame.text),books={},candidates=[],quotes=parseMarketOverview(frame,{serverId,items:matched,capturedAt});
         for(const item of matched){const selection={serverId,itemId:item.id,itemNames:[item.nameRu,item.nameEn].filter(Boolean),serverConfirmed:true,capturedAt};const book=parseMarketRows(frame,selection);if(book.available)books[item.id]=book;candidates.push(...parseOwnSaleEvents(frame,selection));}
         const tax=frame.text.match(/(?:Налоговая\s+ставка|Tax\s+rate|Податкова\s+ставка)\s*:?\s*(\d+(?:[.,]\d+)?)\s*%/iu),taxRate=tax?Number(tax[1].replace(',','.')):null;
         let result={available:true,method:frame.method,capturedAt,books,candidates,diagnostics:{durationMs:Date.now()-started,lots:Object.values(books).reduce((sum,book)=>sum+book.levels.length,0),rejected:Object.values(books).reduce((sum,book)=>sum+(book.rejected||0),0),items:matched.filter(item=>books[item.id]).map(({id,nameEn,nameRu})=>({id,nameEn,nameRu})),rows:Object.entries(books).flatMap(([itemId,book])=>book.levels.map(({price,quantity})=>({itemId,price,quantity})))},taxRate:Number.isFinite(taxRate)&&taxRate<100?taxRate:null,reason:Object.keys(books).length?null:'Відкрий ринок із назвою предмета, цінами та кількостями.'};
+        result.quotes=quotes;result.diagnostics.quotes=quotes;result.diagnostics.items=matched.filter(item=>books[item.id]||quotes.some(quote=>quote.id===String(item.id))).map(({id,nameEn,nameRu})=>({id,nameEn,nameRu}));
+        if(quotes.length)result.reason=null;
         if(sampleOnly){result.sampleOnly=true;result.candidates=[];}
         else if(observationBridge){try{result=await observationBridge.accept(result,{...body.labMarket,serverId});}catch{result.lab={ok:false,error:'Не передано у вузол. Зчитані ціни залишилися локально.'};}}
+        if(!sampleOnly)await Promise.all(quotes.map(quote=>history.update(serverId,quote.id,old=>{const point={ts:capturedAt,low:quote.price,high:null,avg:null,close:quote.price,listings:quote.listings,samples:1,bucket:null,source:'screen-ocr-overview'};if(!old.prices.some(row=>row.ts===point.ts&&row.source===point.source))old.prices.push(point);if(!old.current||Date.parse(old.current.capturedAt)<=Date.parse(capturedAt))old.current={price:quote.price,listings:quote.listings,capturedAt,onMarket:true,source:'screen-ocr-overview'};return old;})));
         json(200,result);return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405,'Дозволено лише читання.');

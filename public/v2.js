@@ -156,7 +156,7 @@ async function scan(){
   if(scanning)return;if(!server()){picker();return;}
   const id=db.server;scanning=true;render();notice('Завантажую всі сторінки ринку й перевіряю рецепти…');
   try{
-    const result=overlayScreenPrices(await api('/api/market?server='+encodeURIComponent(id)),db.markets[id].screenBooks);
+    const result=overlayScreenPrices(await api('/api/market?server='+encodeURIComponent(id)),db.markets[id].screenBooks,Date.now(),db.markets[id].screenQuotes);
     db.markets[id].marketV2=result;
     if(id===db.server){market=result;recalculate();notice(result._source?.stale?'Джерело недоступне. Показую попередній знімок із його справжнім часом.':`Перевірено ${result.loaded} предметів ринку${result.complete?'':' · джерело повернуло неповні дані'}.`);}
     save();budgetSignature='';
@@ -229,7 +229,7 @@ async function refreshBargainMarket(){
   if(!db.server)return null;
   const selectedServer=db.server,result=await api('/api/market?server='+encodeURIComponent(db.server));
   if(db.server!==selectedServer)throw Error('Сервер змінився.');
-  market=overlayScreenPrices(result,profile().screenBooks);profile().marketV2=market;recalculate();save();
+  market=overlayScreenPrices(result,profile().screenBooks,Date.now(),profile().screenQuotes);profile().marketV2=market;recalculate();save();
   const conditionsHost=$('#bargainConditions');if(conditionsHost){conditionsHost.innerHTML=conditions();$('#conditions')?.addEventListener('click',preferences);}
   return market;
 }
@@ -251,10 +251,12 @@ function renderGear(){
 }
 function initializeCollector(){
   collector=createGameCollector({api,dialog,lab:localLab,context:()=>({serverId:db.server,serverLabel:server()?`${server().region} · ${server().name} · ${server().faction==='Elyos'?'Елійці':'Асмодіани'}${localLab?.enabled?' · серверна біржа':''}`:db.server,labMarket:{region:server()?.region,serverId:db.server,faction:faction(),exchange:'server'},language:language(),records:profile().saleRecords||[]}),onStatus:state=>{const button=$('#gameCollector');if(button){button.textContent=state.active?'Збір із гри · працює':localLab?.enabled?'Тест збору':'Збір із гри';button.title=state.message;}},onRecords:records=>{profile().saleRecords=records;save();},onFrame:result=>{
-    const p=profile();p.screenBooks??={};
+    const p=profile();p.screenBooks??={};p.screenQuotes??={};
     for(const id of result.expiredIds||[]){const book=p.screenBooks[id];if(book?.source?.aggregation!=='local-lab')continue;book.fresh=false;if(booksFor()[id]?.source?.aggregation==='local-lab')booksFor()[id].fresh=false;const current=market?.items.find(item=>String(item.id)===id);if(current?.priceProvenance==='screen-ocr'&&Date.parse(current.capturedAt)<=Date.parse(book.capturedAt))current.sourceStale=true;}
     mergePurchaseBooks(booksFor(),result.books||{});
     for(const [id,book] of Object.entries(result.books||{})){if(Date.parse(p.screenBooks[id]?.capturedAt)>Date.parse(book.capturedAt))continue;p.screenBooks[id]=book;const metadata=items.get(id),current=market?.items.find(item=>String(item.id)===id);if(market&&book.levels.length&&!(Date.parse(current?.capturedAt)>Date.parse(book.capturedAt))){const observed={id,name:metadata?.nameEn||metadata?.nameRu||id,price:book.levels[0].price,listed:true,capturedAt:book.capturedAt,expiresAt:book.expiresAt??null,sourceStale:false,priceProvenance:'screen-ocr'};if(current)Object.assign(current,observed);else market.items.push(observed);}}
+    for(const quote of result.quotes||[]){if(Date.parse(p.screenQuotes[quote.id]?.capturedAt)>Date.parse(quote.capturedAt))continue;p.screenQuotes[quote.id]=quote;const book=p.screenBooks[quote.id];if(book&&Date.parse(book.capturedAt)<Date.parse(quote.capturedAt)){book.fresh=false;if(booksFor()[quote.id]?.source?.kind==='screen-ocr')booksFor()[quote.id].fresh=false;}}
+    if(result.quotes?.length){market=overlayScreenPrices(market||{items:[]},p.screenBooks,Date.now(),p.screenQuotes);p.marketV2=market;}
     if(result.taxRate!==null&&Number.isFinite(result.taxRate)&&result.taxRate!==p.settings.saleTax&&!(Date.parse(p.settings.taxObservedAt)>Date.parse(result.capturedAt))){p.settings.saleTax=result.taxRate;p.settings.taxConfirmed=true;p.settings.taxSource='screen-ocr';p.settings.taxObservedAt=result.capturedAt;toast('Податок із гри: '+num(result.taxRate)+'%');}
     save();recalculate();if(openRecipeId&&purchaseView){const next=analysis?.rows.find(row=>row.recipeId===openRecipeId);if(next)purchaseView.updateRow(next,p.settings);}if(db.settings.screen==='bargains'){bargainView?.update({market,books:{...booksFor(),...p.screenBooks},saleTax:p.settings.saleTax+p.settings.listingTax});}else if(!$('#modal')?.children.length){render();}else renderRows();
   }});
@@ -270,7 +272,7 @@ async function boot(){
   if(recovered.state){db=recovered.state;db.settings={...defaults.settings,...db.settings};}else if(recovered.hasInvalid){canSave=false;loadError+=' Збережені дані не вдалося прочитати. Файл не перезаписано.';}
   try{
     catalog=await api('/data/catalog.json');items=new Map(catalog.items.map(item=>[String(item.id),item]));
-    if(db.server)market=overlayScreenPrices(profile().marketV2||null,profile().screenBooks);
+    if(db.server)market=overlayScreenPrices(profile().marketV2||null,profile().screenBooks,Date.now(),profile().screenQuotes);
     try{localLab=await api('/api/lab/status');}catch{localLab=null;}
     initializeCollector();recalculate();render();notice(loadError||'');
     if(!db.serversCache.length){try{const data=await api('/api/servers');db.serversCache=data.servers||data;header();}catch(error){notice(error.message);}}

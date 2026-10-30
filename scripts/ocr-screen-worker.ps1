@@ -39,11 +39,49 @@ function Read-Frame([string]$imagePath,[string]$language) {
   }catch{return @{available=$false;reason='Не вдалося прочитати кадр Windows OCR.';lines=@();text=''}}
   finally{if($null -ne $bitmap){$bitmap.Dispose()};if($null -ne $stream){$stream.Dispose()}}
 }
+function Read-PriceColumn($request,$result) {
+  if(-not $result.available -or $result.text -notmatch '(?i)список продаж|sales list|sale listings|listings'){return}
+  $header=@($result.lines | Where-Object {$_.text -match '(?i)^Мин\.?\s+цена|^Min(?:imum)?\s+(?:sale\s+)?price'}) | Select-Object -First 1
+  if($null -eq $header){return}
+  $columnPath=[string]$request.imagePath+'.contrast.png'
+  try {
+    if(-not ('MarketPriceContrast' -as [type])){
+      Add-Type -AssemblyName System.Drawing
+      Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+public static class MarketPriceContrast {
+  public static void Create(string source,string target,int x,int y){
+    using(var input=new Bitmap(source)){
+      if(x<0||y<0||x>=input.Width||y>=input.Height)throw new Exception("Invalid crop");
+      using(var image=new Bitmap(input.Width-x,input.Height-y,PixelFormat.Format32bppArgb)){
+        using(var graphics=Graphics.FromImage(image))graphics.DrawImage(input,new Rectangle(0,0,image.Width,image.Height),new Rectangle(x,y,image.Width,image.Height),GraphicsUnit.Pixel);
+        var bits=image.LockBits(new Rectangle(0,0,image.Width,image.Height),ImageLockMode.ReadWrite,PixelFormat.Format32bppArgb);
+        try{byte[] bytes=new byte[Math.Abs(bits.Stride)*image.Height];Marshal.Copy(bits.Scan0,bytes,0,bytes.Length);
+          for(int row=0;row<image.Height;row++)for(int col=0;col<image.Width;col++){int i=row*Math.Abs(bits.Stride)+col*4;byte value=(byte)((bytes[i]*114+bytes[i+1]*587+bytes[i+2]*299)/1000>200?0:255);bytes[i]=bytes[i+1]=bytes[i+2]=value;bytes[i+3]=255;}
+          Marshal.Copy(bytes,0,bits.Scan0,bytes.Length);
+        }finally{image.UnlockBits(bits);}image.Save(target,ImageFormat.Png);
+      }
+    }
+  }
+}
+'@
+    }
+    $x=[Math]::Max(0,[Math]::Floor(($header.words | ForEach-Object {[double]$_.x} | Measure-Object -Minimum).Minimum)-80)
+    $y=[Math]::Floor(($header.words | ForEach-Object {$_.y+$_.height} | Measure-Object -Maximum).Maximum)+3
+    [MarketPriceContrast]::Create([string]$request.imagePath,$columnPath,$x,$y)
+    $extra=Read-Frame $columnPath ([string]$request.language)
+    if($extra.available){$result.numericLines=@($extra.lines | ForEach-Object {@{text=$_.text;words=@($_.words | ForEach-Object {@{text=$_.text;x=$_.x+$x;y=$_.y+$y;width=$_.width;height=$_.height}})}})}
+  }catch{}finally{if([IO.File]::Exists($columnPath)){[IO.File]::Delete($columnPath)}}
+}
 [Console]::Out.WriteLine('{"type":"ready"}')
 while($null -ne ($taskLine=[Console]::ReadLine())) {
   try {
     $request=$taskLine | ConvertFrom-Json
     $result=Read-Frame ([string]$request.imagePath) ([string]$request.language)
+    Read-PriceColumn $request $result
     $reply=@{id=$request.id;result=$result} | ConvertTo-Json -Depth 8 -Compress
     [Console]::Out.WriteLine($reply);[Console]::Out.Flush()
   }catch{[Console]::Out.WriteLine('{"id":null,"result":{"available":false,"reason":"Некоректне завдання OCR."}}');[Console]::Out.Flush()}

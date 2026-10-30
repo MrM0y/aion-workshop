@@ -15,13 +15,13 @@ export function currentPriceOverride(manual,observation){
 }
 
 /** Preserve a newer, fresh screen observation when the public market refreshes. */
-export function overlayScreenPrices(market,books={},now=Date.now()){
+export function overlayScreenPrices(market,books={},now=Date.now(),quotes={}){
   if(!market)return market;
   const rows=new Map((market.items||[]).map(item=>[String(item.id),item]));
-  for(const [id,book] of Object.entries(books)){
-    const at=Date.parse(book?.capturedAt),current=rows.get(id),price=book?.levels?.[0]?.price;
+  for(const [id,book] of [...Object.entries(books),...Object.entries(quotes)]){
+    const at=Date.parse(book?.capturedAt),current=rows.get(id),price=book?.source?.view==='overview'?book.price:book?.levels?.[0]?.price;
     if(book?.source?.kind!=='screen-ocr'||book.fresh===false||(book.expiresAt!=null&&(!Number.isFinite(Date.parse(book.expiresAt))||Date.parse(book.expiresAt)<=now))||!Number.isFinite(at)||at>now+60000||now-at>3600000||!number(price)||Date.parse(current?.capturedAt)>=at)continue;
-    rows.set(id,{...current,id,price,listed:true,capturedAt:book.capturedAt,expiresAt:book.expiresAt??null,sourceStale:false,priceProvenance:'screen-ocr'});
+    rows.set(id,{...current,id,price,listed:true,capturedAt:book.capturedAt,expiresAt:book.expiresAt??null,sourceStale:false,priceProvenance:'screen-ocr',...(Number.isSafeInteger(book.listings)?{listings:book.listings}:{})});
   }
   return {...market,items:[...rows.values()]};
 }
