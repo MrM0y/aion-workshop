@@ -61,14 +61,17 @@ try {
   $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
   if (!(Test-Path -LiteralPath $compiler)) { throw '.NET Framework C# compiler is required to build (included in Windows 10/11).' }
   $exe = Join-Path $output 'AION-Workshop.exe'
-  & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$exe" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/resource:$payloadPath,payload.zip" "/resource:$(Join-Path $stage 'launcher.json'),launcher.json" (Join-Path $project 'launcher/Launcher.cs')
+  & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$exe" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/resource:$payloadPath,payload.zip" "/resource:$(Join-Path $stage 'launcher.json'),launcher.json" (Join-Path $project 'launcher/Launcher.cs') (Join-Path $project 'launcher/IndexedUpdate.cs')
   if ($LASTEXITCODE -ne 0) { throw 'Launcher compilation failed.' }
   $self = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru -WindowStyle Hidden
   if ($self.ExitCode -ne 0) { throw "Launcher self-test failed: $($self.ExitCode)" }
   Copy-Item -LiteralPath $payloadPath -Destination (Join-Path $output 'AION-Workshop-App.zip') -Force
-  [IO.File]::WriteAllText((Join-Path $output 'update.json'),(@{version=$version;sha256=$hash;package='AION-Workshop-App.zip';repository=$Repository;nodeVersion=$NodeVersion}|ConvertTo-Json -Compress),(New-Object Text.UTF8Encoding $false))
+  & (Join-Path $runtime 'node.exe') (Join-Path $project 'scripts/index-package.mjs') $payloadPath (Join-Path $output 'files.json')
+  if ($LASTEXITCODE -ne 0) { throw 'Package indexing failed.' }
+  $indexHash=(Get-FileHash -LiteralPath (Join-Path $output 'files.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+  [IO.File]::WriteAllText((Join-Path $output 'update.json'),(@{version=$version;sha256=$hash;package='AION-Workshop-App.zip';repository=$Repository;nodeVersion=$NodeVersion;filesSha256=$indexHash}|ConvertTo-Json -Compress),(New-Object Text.UTF8Encoding $false))
   $exeHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
-  [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS.txt'),"$exeHash  AION-Workshop.exe`n$hash  AION-Workshop-App.zip`n",(New-Object Text.UTF8Encoding $false))
+  [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS.txt'),"$exeHash  AION-Workshop.exe`n$hash  AION-Workshop-App.zip`n$indexHash  files.json`n",(New-Object Text.UTF8Encoding $false))
   Write-Output "Built AION Workshop $version for $Repository; Node $NodeVersion (official SHA256 verified)."
   Get-Item -LiteralPath $exe,(Join-Path $output 'AION-Workshop-App.zip'),(Join-Path $output 'update.json') | Select-Object Name,Length
 } finally {

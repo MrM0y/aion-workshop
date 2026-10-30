@@ -17,7 +17,7 @@ using System.Windows.Forms;
 
 // Framework 4.8 is included in supported Windows 10/11. No Node installation is needed.
 internal static class Launcher {
-    static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 };
+    static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
     static string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AIONWorkshop");
     static string Repository, EmbeddedVersion, Url;
     static Process Child;
@@ -25,7 +25,8 @@ internal static class Launcher {
     static Form Splash;
     static Label Status;
     static Mutex Lock;
-    static bool Exiting, NoBrowser;
+    static bool Exiting, NoBrowser, InstalledLauncher;
+    static string DataDirectory;
     static string Executable { get { return Assembly.GetExecutingAssembly().Location; } }
     static string Pointer { get { return Path.Combine(Root, "current.json"); } }
     static string PortFile { get { return Path.Combine(Root, "port.json"); } }
@@ -39,6 +40,8 @@ internal static class Launcher {
             NoBrowser=args.Contains("--no-browser");
             var config = ReadObject(ResourceText("launcher.json"));
             Repository = Text(config, "repository"); EmbeddedVersion = Text(config, "version");
+            InstalledLauncher=config.ContainsKey("installed")&&Object.Equals(config["installed"],true);
+            if(InstalledLauncher&&profileIndex<0){DataDirectory=Path.Combine(Root,"data");Root=Path.GetDirectoryName(Executable);}else DataDirectory=Path.Combine(Root,"data");
             if (!Regex.IsMatch(Repository, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") || !ValidVersion(EmbeddedVersion)) throw new Exception("Некоректна конфігурація збірки.");
             if (args.Contains("--self-test")) return SelfTest();
             // This CLI path supports release smoke tests without personal state or browser interaction.
@@ -56,7 +59,7 @@ internal static class Launcher {
             Status = new Label { AutoSize=false, Dock=DockStyle.Fill, Padding=new Padding(20), Text="Відкриваю майстерню…" }; Splash.Controls.Add(Status); Splash.Show(); Application.DoEvents();
             string version = InstalledVersion();
             string previousVersion=version??EmbeddedVersion;
-            if (version == null || new Version(EmbeddedVersion)>new Version(version)) { version=EmbeddedVersion; InstallEmbedded(version); }
+            if (version == null || new Version(EmbeddedVersion)>new Version(version)) { version=EmbeddedVersion;if(Complete(version))SetCurrent(version);else{if(InstalledLauncher)throw new Exception("Файли програми відсутні. Запусти Setup ще раз для відновлення.");InstallEmbedded(version);} }
             version = CheckUpdate(version, false);
             try { StartApp(version); }
             catch { if(version==previousVersion)throw;KillChild();SetCurrent(previousVersion);version=previousVersion;StartApp(version);MessageBox.Show("Нова версія не запустилася. Повернув попередню; твої дані збережено.","AION Workshop"); }
@@ -147,13 +150,15 @@ internal static class Launcher {
         foreach(var asset in assets){var data=asset as Dictionary<string,object>;if(data!=null&&Text(data,"name")==name)return Text(data,"browser_download_url");}
         return null;
     }
-    static byte[] Download(string address,long limit) {
+    static byte[] Download(string address,long limit,long? offset=null,long? packageSize=null) {
         var uri=new Uri(address);
         for(int redirect=0;redirect<6;redirect++){
             if(!AllowedDownload(uri))throw new Exception("Адреса оновлення не належить GitHub цього проєкту.");
             var request=(HttpWebRequest)WebRequest.Create(uri);request.UserAgent="AION-Workshop-Launcher";request.Timeout=15000;request.ReadWriteTimeout=30000;request.AllowAutoRedirect=false;request.Accept="application/vnd.github+json";
+            if(offset.HasValue)request.AddRange(offset.Value,offset.Value+limit-1);
             using(var response=(HttpWebResponse)request.GetResponse()) {
                 if((int)response.StatusCode>=300&&(int)response.StatusCode<400){uri=new Uri(uri,response.Headers["Location"]);continue;}
+                if(offset.HasValue&&((int)response.StatusCode!=206||response.Headers["Content-Range"]!="bytes "+offset.Value+"-"+(offset.Value+limit-1)+"/"+packageSize.Value))throw new Exception("Сервер не підтвердив частину архіву.");
                 if(response.ContentLength>limit)throw new Exception("Оновлення перевищує ліміт завантаження.");
                 using(var source=response.GetResponseStream())using(var output=new MemoryStream()) { byte[] buffer=new byte[65536];int read;while((read=source.Read(buffer,0,buffer.Length))>0){if(output.Length+read>limit)throw new Exception("Завантаження завелике.");output.Write(buffer,0,read);if(limit>1048576)Say("Завантажую оновлення: "+(output.Length/1048576)+" МБ…");}return output.ToArray(); }
             }
@@ -172,9 +177,18 @@ internal static class Launcher {
             if(Text(manifest,"version")!=tag||hash==null||!Regex.IsMatch(hash,@"^[a-fA-F0-9]{64}$"))throw new Exception("Некоректний опис оновлення.");
             if(MessageBox.Show("Є версія "+tag+". Завантажити й оновити? Твої налаштування залишаться.","Оновлення AION Workshop",MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes)return current;
             if(!Complete(tag)){
-                byte[] bytes=Download(payloadUrl,512L*1024*1024);using(var sha=SHA256.Create()){if(BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant()!=hash.ToLowerInvariant())throw new Exception("Контрольна сума оновлення не збігається. Стару версію збережено.");}
                 string destination=VersionDirectory(tag),staging=destination+".stage-"+Guid.NewGuid().ToString("N");
-                try { using(var stream=new MemoryStream(bytes))Extract(stream,staging);ValidateInstalled(staging,tag);File.WriteAllText(Path.Combine(staging,"installed.ok"),tag);if(Directory.Exists(destination))Directory.Move(destination,destination+".incomplete-"+Guid.NewGuid().ToString("N"));Directory.Move(staging,destination); }
+                try {
+                    string indexUrl=AssetUrl(release,"files.json"),indexHash=Text(manifest,"filesSha256");
+                    if(indexUrl!=null&&indexHash!=null&&Regex.IsMatch(indexHash,@"^[a-f0-9]{64}$")){
+                        Say("Перевіряю, які файли змінилися…");byte[] indexBytes=Download(indexUrl,4L*1024*1024);
+                        using(var sha=SHA256.Create())if(BitConverter.ToString(sha.ComputeHash(indexBytes)).Replace("-","").ToLowerInvariant()!=indexHash)throw new Exception("Індекс оновлення пошкоджений.");
+                        IndexedUpdate.Apply(ReadObject(Encoding.UTF8.GetString(indexBytes)),VersionDirectory(current),staging,(offset,length,total)=>Download(payloadUrl,length,offset,total));
+                    }else{
+                        byte[] bytes=Download(payloadUrl,512L*1024*1024);using(var sha=SHA256.Create())if(BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-","").ToLowerInvariant()!=hash.ToLowerInvariant())throw new Exception("Контрольна сума оновлення не збігається. Стару версію збережено.");
+                        using(var stream=new MemoryStream(bytes))Extract(stream,staging);
+                    }
+                    ValidateInstalled(staging,tag);File.WriteAllText(Path.Combine(staging,"installed.ok"),tag);if(Directory.Exists(destination))Directory.Move(destination,destination+".incomplete-"+Guid.NewGuid().ToString("N"));Directory.Move(staging,destination); }
                 finally {if(Directory.Exists(staging))Directory.Delete(staging,true);}
             }
             SetCurrent(tag);return tag;
@@ -189,7 +203,7 @@ internal static class Launcher {
         }
         Say("Запускаю майстерню…");int port=SelectPort(PortFile);
         string folder=VersionDirectory(version);var info=new ProcessStartInfo(Path.Combine(folder,"runtime","node.exe"),"server.mjs"){WorkingDirectory=Path.Combine(folder,"app"),UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden};
-        info.EnvironmentVariables["AION_WORKSHOP_DATA_DIR"]=Path.Combine(Root,"data");info.EnvironmentVariables["AION_WORKSHOP_PORT"]=port.ToString();Child=Process.Start(info);Url="http://127.0.0.1:"+port;
+        info.EnvironmentVariables["AION_WORKSHOP_DATA_DIR"]=DataDirectory;info.EnvironmentVariables["AION_WORKSHOP_PORT"]=port.ToString();Child=Process.Start(info);Url="http://127.0.0.1:"+port;
         bool ready=false;for(int attempt=0;attempt<100;attempt++) {if(Child.HasExited)break;try{var request=(HttpWebRequest)WebRequest.Create(Url+"/api/app-info");request.Timeout=250;using(var response=request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream())){var data=ReadObject(reader.ReadToEnd());if(Text(data,"appId")=="aion-workshop"&&Text(data,"version")==version&&Text(data,"repositoryUrl")=="https://github.com/"+Repository){ready=true;break;}}}catch{}Thread.Sleep(100);Application.DoEvents();}
         if(!ready)throw new Exception("Програма не запустилася. Дані збережено. Спробуй ще раз.");
         File.WriteAllText(Path.Combine(Root,"running.json"),Json.Serialize(new{pid=Child.Id,url=Url,version=version}));
@@ -211,7 +225,7 @@ internal static class Launcher {
     static void Shutdown() {if(Exiting)return;Exiting=true;if(Tray!=null){Tray.Visible=false;Tray.Dispose();}KillChild();if(Lock!=null)try{Lock.ReleaseMutex();}catch{} }
     static int SelfTest() {
         if(!ValidVersion(EmbeddedVersion)||ValidVersion("../bad")||!AllowedDownload(new Uri("https://api.github.com/repos/"+Repository+"/releases/latest"))||AllowedDownload(new Uri("https://example.com/file.zip"))||AllowedDownload(new Uri("https://github.com/another/project/releases/download/v1/a.zip"))||AllowedDownload(new Uri("http://github.com/"+Repository+"/releases/download/v1/a.zip")))return 2;
-        using(var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")){if(resource==null||resource.Length<100)return 3;using(var sha=SHA256.Create())if(BitConverter.ToString(sha.ComputeHash(resource)).Replace("-","").ToLowerInvariant()!=Text(ReadObject(ResourceText("launcher.json")),"payloadSha256"))return 4;}
+        if(!InstalledLauncher)using(var resource=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")){if(resource==null||resource.Length<100)return 3;using(var sha=SHA256.Create())if(BitConverter.ToString(sha.ComputeHash(resource)).Replace("-","").ToLowerInvariant()!=Text(ReadObject(ResourceText("launcher.json")),"payloadSha256"))return 4;}
         var release=ReadObject("{\"tag_name\":\"v3.2.0\",\"assets\":[{\"name\":\"update.json\",\"browser_download_url\":\"https://github.com/"+Repository+"/releases/download/v3.2.0/update.json\"},{\"name\":\"AION-Workshop-App.zip\",\"browser_download_url\":\"https://github.com/"+Repository+"/releases/download/v3.2.0/AION-Workshop-App.zip\"}]}");
         if(AssetUrl(release,"update.json")!="https://github.com/"+Repository+"/releases/download/v3.2.0/update.json"||AssetUrl(release,"AION-Workshop-App.zip")==null||AssetUrl(release,"missing")!=null||AssetUrl(ReadObject("{\"assets\":[null,7,\"bad\"]}"),"update.json")!=null)return 6;
         if(!ValidPort(1024)||!ValidPort(65535)||ValidPort(1023)||ValidPort(65536))return 9;
