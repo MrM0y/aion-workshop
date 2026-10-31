@@ -1,3 +1,4 @@
+import {gradeClass} from './live-dom.js';
 import {isGearItem} from './market-model.js';
 
 const skillLabels={Blacksmithing:'Ковальство',Handicrafting:'Ювелірна справа',Armorsmithing:'Виготовлення броні',Alchemy:'Алхімія',Cooking:'Кулінарія',Conversion:'Перетворення'};
@@ -108,7 +109,7 @@ export function mountRecipePicker(options) {
     if(searching||category){
       const results=searchRecipeEntries(index,{query:searching?query:'',skill:searching?'':skill,category:searching?'':category,language:lang(),limit:60});
       if(category&&!searching)html+=`<button type="button" class="recipe-picker-all" data-picker-filter>Показати всю категорію</button>`;
-      html+=results.length?`<div class="recipe-picker-items">${results.map((entry,i)=>`<button type="button" class="recipe-picker-item" data-picker-item="${i}">${image(entry.icon)}<span>${escape(entry.name)}<small>${escape(recipeSkillLabel(entry.skill))} · ${escape(recipeCategoryLabel(entry.category))}</small></span>${entry.gear?'<span class="recipe-picker-go" aria-hidden="true">↗</span>':''}</button>`).join('')}</div>`:'<p class="recipe-picker-empty">Такого предмета немає. Спробуй назву англійською або російською.</p>';
+      html+=results.length?`<div class="recipe-picker-items">${results.map((entry,i)=>`<button type="button" class="recipe-picker-item ${gradeClass(entry.grade)}" data-picker-item="${i}">${image(entry.icon)}<span>${escape(entry.name)}<small>${escape(recipeSkillLabel(entry.skill))} · ${escape(recipeCategoryLabel(entry.category))}</small></span>${entry.gear?'<span class="recipe-picker-go" aria-hidden="true">↗</span>':''}</button>`).join('')}</div>`:'<p class="recipe-picker-empty">Такого предмета немає. Спробуй назву англійською або російською.</p>';
       panel.innerHTML=html;
       panel.querySelectorAll('[data-picker-item]').forEach(button=>button.addEventListener('click',()=>{const entry=results[Number(button.dataset.pickerItem)];close();config.onSelect?.(entry);}));
     }else{

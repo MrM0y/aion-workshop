@@ -1,3 +1,4 @@
+import {parseSupplyRequests,createSupplyStore} from './lib/supply-requests.mjs';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -22,7 +23,7 @@ const securityHeaders = {
   'Cache-Control': 'no-store'
 };
 const files = {'/market-movement.js':'market-movement.js','/market-chart.js':'market-chart.js','/market-chart.css':'market-chart.css','/depth-cost.js':'depth-cost.js','/ranking.js':'ranking.js','/purchase-plan.js':'purchase-plan.js','/purchase-plan.css':'purchase-plan.css','/recipe-picker.js':'recipe-picker.js','/recipe-picker.css':'recipe-picker.css','/gear-view.js':'gear-view.js','/gear-view.css':'gear-view.css','/market-insights.js':'market-insights.js','/market-insights.css':'market-insights.css','/insights-model.js':'insights-model.js','/':'index.html','/index.html':'index.html','/app.js':'app.js','/engine.js':'engine.js','/state.js':'state.js','/ledger.js':'ledger.js','/tour.js':'tour.js','/tour.css':'tour.css','/help-model.js':'help-model.js','/style.css':'style.css','/market-model.js':'market-model.js','/catalog-model.js':'catalog-model.js','/gear-model.js':'gear-model.js','/gear-worker.js':'gear-worker.js','/v2.js':'v2.js','/v2.css':'v2.css','/data/catalog.json':'data/catalog.json','/data/rates.json':'data/rates.json'};
-for(const name of ['transfer-rules.js','resource-routes.js','resource-policy.js','resource-batch.js','resource-executor.js','resource-worker.js','purchase-comparison.js','game-collector.js','sale-model.js'])files['/'+name]=name;
+for(const name of ['supply-response.js','supply-signals.js','live-dom.js','transfer-rules.js','resource-routes.js','resource-policy.js','resource-batch.js','resource-executor.js','resource-worker.js','purchase-comparison.js','game-collector.js','sale-model.js'])files['/'+name]=name;
 for(const name of ['feedback.js','feedback.css'])files['/'+name]=name;
 for(const name of ['bargain-model.js','bargain-view.js','bargain-view.css'])files['/'+name]=name;
 files['/usage-guide.js']='usage-guide.js';
@@ -34,6 +35,7 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
   const store = createStateStore(statePath);
   const source = createSourceAdapter({fetchImpl, now, cacheMs, timeoutMs});
   const stateFile=statePath instanceof URL?fileURLToPath(statePath):path.resolve(statePath);
+  const supplyStore=createSupplyStore(stateFile+'.supplies.json',{now});
   const history=createHistoryStore(historyPath||stateFile+'.history',{now});
   const insights=createInsightsService({source,history,now});
   const bargainHistory=createBargainHistoryService({source,history,now});
@@ -84,26 +86,38 @@ export function createAppServer({statePath = process.env.AION_WORKSHOP_DATA_DIR?
           json(200,await insights.addEvent(await readJsonBody(req)));
         }else json(200,await insights.deleteEvent(url));return;
       }
+      if(url.pathname==='/api/supply-signals'){if(req.method!=='GET')throw new HttpError(405,'Дозволено GET.');const serverId=url.searchParams.get('server');if(!/^\d{1,8}$/.test(serverId||''))throw new HttpError(400,'Обери сервер.');json(200,{observations:await supplyStore.list(serverId)});return;}
       if(url.pathname==='/api/collector/status'){if(req.method!=='GET')throw new HttpError(405,'Дозволено GET.');json(200,collector.status());return;}
       if(url.pathname==='/api/collector/recognize'){
         if(req.method!=='POST'||req.headers.origin!==origin)throw new HttpError(403,'Зчитування дозволено лише з локальної програми.');
         if(!(req.headers['content-type']||'').toLowerCase().startsWith('application/json'))throw new HttpError(415,'Очікується JSON.');
         const body=await readJsonBody(req),serverId=String(body.serverId||'');
         if(!/^\d{1,8}$/.test(serverId))throw new HttpError(400,'Спершу обери сервер.');
-        const sampleOnly=Boolean(observationBridge&&body.sampleOnly===true),suppliedTime=body.capturedAt==null?now():Date.parse(body.capturedAt);
+        const sampleOnly=body.sampleOnly===true,suppliedTime=body.capturedAt==null?now():Date.parse(body.capturedAt);
         if(!Number.isFinite(suppliedTime)||suppliedTime>now()+60000||(!sampleOnly&&now()-suppliedTime>86400000))throw new HttpError(400,'Час кадру невідомий або застарілий.');
         const capturedAt=new Date(suppliedTime).toISOString();
         const started=Date.now(),frame=await collector.recognize(body);if(!frame.available){json(200,frame);return;}
         collectorCatalog??=JSON.parse(await readFile(new URL('data/catalog.json',publicRoot),'utf8'));
+        const supply=parseSupplyRequests(frame,collectorCatalog,{serverId,capturedAt,now:sampleOnly?suppliedTime:now()});
         const matched=screenItemCandidates(collectorCatalog,frame.text),books={},candidates=[],quotes=parseMarketOverview(frame,{serverId,items:matched,capturedAt});
         for(const item of matched){const selection={serverId,itemId:item.id,itemNames:[item.nameRu,item.nameEn].filter(Boolean),serverConfirmed:true,capturedAt};const book=parseMarketRows(frame,selection);if(book.available)books[item.id]=book;candidates.push(...parseOwnSaleEvents(frame,selection));}
         const tax=frame.text.match(/(?:Налоговая\s+ставка|Tax\s+rate|Податкова\s+ставка)\s*:?\s*(\d+(?:[.,]\d+)?)\s*%/iu),taxRate=tax?Number(tax[1].replace(',','.')):null;
-        let result={available:true,method:frame.method,capturedAt,books,candidates,diagnostics:{durationMs:Date.now()-started,lots:Object.values(books).reduce((sum,book)=>sum+book.levels.length,0),rejected:Object.values(books).reduce((sum,book)=>sum+(book.rejected||0),0),items:matched.filter(item=>books[item.id]).map(({id,nameEn,nameRu})=>({id,nameEn,nameRu})),rows:Object.entries(books).flatMap(([itemId,book])=>book.levels.map(({price,quantity})=>({itemId,price,quantity})))},taxRate:Number.isFinite(taxRate)&&taxRate<100?taxRate:null,reason:Object.keys(books).length?null:'Відкрий ринок із назвою предмета, цінами та кількостями.'};
-        result.quotes=quotes;result.diagnostics.quotes=quotes;result.diagnostics.items=matched.filter(item=>books[item.id]||quotes.some(quote=>quote.id===String(item.id))).map(({id,nameEn,nameRu})=>({id,nameEn,nameRu}));
-        if(quotes.length)result.reason=null;
+        let result={available:true,method:frame.method,capturedAt,books,candidates,diagnostics:{durationMs:Date.now()-started,lots:Object.values(books).reduce((sum,book)=>sum+book.levels.length,0),rejected:Object.values(books).reduce((sum,book)=>sum+(book.rejected||0),0),items:matched.filter(item=>books[item.id]).map(({id,nameEn,nameRu,grade})=>({id,nameEn,nameRu,grade:grade||null})),rows:Object.entries(books).flatMap(([itemId,book])=>book.levels.map(({price,quantity})=>({itemId,price,quantity})))},taxRate:Number.isFinite(taxRate)&&taxRate<100?taxRate:null,reason:Object.keys(books).length?null:'Відкрий ринок із назвою предмета, цінами та кількостями.'};
+        result.quotes=quotes;result.diagnostics.quotes=quotes;result.diagnostics.items=matched.filter(item=>books[item.id]||quotes.some(quote=>quote.id===String(item.id))).map(({id,nameEn,nameRu,grade})=>({id,nameEn,nameRu,grade:grade||null}));
+        result.supply=supply;
+        if(supply.available){result.books={};result.quotes=[];result.candidates=[];result.diagnostics.quotes=[];result.reason=supply.reason;}
+        if(!sampleOnly&&supply.observations.length){
+          result.supply.observations=await supplyStore.record(supply.observations);
+          for(const observation of result.supply.observations){
+            const target=collectorCatalog.items.find(item=>String(item.id)===observation.itemId);
+            const related=[...new Set([observation.itemId,...collectorCatalog.recipes.filter(recipe=>String(recipe.resultId)===observation.itemId||String(recipe.comboResultId)===observation.itemId).flatMap(recipe=>recipe.materials.map(material=>String(material.itemId)))])].slice(0,40);
+            await Promise.all(related.map(itemId=>history.update(serverId,itemId,old=>{const event={id:observation.id,at:observation.observedAt,endAt:observation.expiresAt,label:'Поставку помічено: '+(target?.nameRu||target?.nameEn||observation.itemId),source:'screen-ocr-supply',scope:'character',targetId:observation.itemId,quantity:observation.quantity};const existing=old.events.findIndex(value=>value.id===event.id);if(existing<0)old.events.push(event);else old.events[existing]=event;return old;})));
+          }
+        }
+        if(result.quotes.length)result.reason=null;
         if(sampleOnly){result.sampleOnly=true;result.candidates=[];}
         else if(observationBridge){try{result=await observationBridge.accept(result,{...body.labMarket,serverId});}catch{result.lab={ok:false,error:'Не передано у вузол. Зчитані ціни залишилися локально.'};}}
-        if(!sampleOnly)await Promise.all(quotes.map(quote=>history.update(serverId,quote.id,old=>{const point={ts:capturedAt,low:quote.price,high:null,avg:null,close:quote.price,listings:quote.listings,samples:1,bucket:null,source:'screen-ocr-overview'};if(!old.prices.some(row=>row.ts===point.ts&&row.source===point.source))old.prices.push(point);if(!old.current||Date.parse(old.current.capturedAt)<=Date.parse(capturedAt))old.current={price:quote.price,listings:quote.listings,capturedAt,onMarket:true,source:'screen-ocr-overview'};return old;})));
+        if(!sampleOnly&&!supply.available)await Promise.all(quotes.map(quote=>history.update(serverId,quote.id,old=>{const point={ts:capturedAt,low:quote.price,high:null,avg:null,close:quote.price,listings:quote.listings,samples:1,bucket:null,source:'screen-ocr-overview'};if(!old.prices.some(row=>row.ts===point.ts&&row.source===point.source))old.prices.push(point);if(!old.current||Date.parse(old.current.capturedAt)<=Date.parse(capturedAt))old.current={price:quote.price,listings:quote.listings,capturedAt,onMarket:true,source:'screen-ocr-overview'};return old;})));
         json(200,result);return;
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405,'Дозволено лише читання.');

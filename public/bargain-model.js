@@ -1,4 +1,22 @@
+import {isGearItem} from './market-model.js';
 const DAY=86400000,HOUR=3600000;
+
+/** Distinct craft outputs using a tradable material, not a measure of market demand. */
+export function resourceUses(catalog,{faction}={}){
+  const items=new Map((catalog?.items||[]).map(item=>[String(item.id),item])),uses=new Map();
+  const race=faction==='Elyos'?'Light':faction==='Asmodian'?'Dark':null;
+  for(const recipe of catalog?.recipes||[]){
+    if(race&&recipe.race&&!['All','Both',race].includes(recipe.race))continue;
+    if(recipe.resultId==null)continue;
+    for(const material of recipe.materials||[]){
+      const id=String(material.itemId),item=items.get(id);
+      if(!item||item.tradable===false||isGearItem(item)||/^93\d{7}$/.test(id))continue;
+      if(!uses.has(id))uses.set(id,new Map());
+      if(!uses.get(id).has(String(recipe.resultId)))uses.get(id).set(String(recipe.resultId),recipe);
+    }
+  }
+  return new Map([...uses].map(([id,recipes])=>[id,[...recipes.values()]]));
+}
 const amount=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=Number.MAX_SAFE_INTEGER;
 const time=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?Date.parse(value):null;
 const median=values=>{const rows=[...values].sort((a,b)=>a-b),middle=Math.floor(rows.length/2);return rows.length%2?rows[middle]:(rows[middle-1]+rows[middle])/2;};
@@ -80,6 +98,6 @@ export function evaluateBargain({item,current,insights,serverId,budget=null,purp
 }
 
 export function sortBargains(rows,key='discount',direction=key==='capital'?'asc':'desc'){
-  const value=row=>key==='saving'?row.purchase?.saving:key==='capital'?row.purchase?.cost:key==='volume'?row.liquidity?.unitsSold:key==='price'?row.price:key==='reference'?row.reference?.price:key==='quantity'?row.purchase?.quantity:row.discount;
+  const value=row=>key==='uses'?row.recipeUses:key==='saving'?row.purchase?.saving:key==='capital'?row.purchase?.cost:key==='volume'?row.liquidity?.unitsSold:key==='price'?row.price:key==='reference'?row.reference?.price:key==='quantity'?row.purchase?.quantity:row.discount;
   return [...rows].sort((a,b)=>{const av=value(a),bv=value(b),ak=amount(av),bk=amount(bv);return ak!==bk?(ak?-1:1):ak&&av!==bv?(av-bv)*(direction==='asc'?1:-1):a.id.localeCompare(b.id,'en',{numeric:true});});
 }

@@ -2,3 +2,7 @@
 .bargain-calculation{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6}.bargain-calculation summary{cursor:pointer}.bargain-calculation p{max-width:850px;margin:8px 0}
 .bargain-table th button{background:none;border:0;color:inherit;font-size:inherit;text-transform:inherit;letter-spacing:inherit;padding:0;white-space:nowrap}.bargain-table th button:hover{color:var(--accent)}.bargain-table th:first-child,.bargain-table td:first-child{width:42px;padding:8px}.bargain-table th:nth-child(2),.bargain-table td:nth-child(2){text-align:left}.bargain-table{min-width:600px}.bargain-table .item-label small{font-size:10px;color:var(--muted);display:block}.bargain-hero{margin-bottom:22px}.bargain-progress{font-size:11px}.bargain-calculation{margin-top:20px;font-size:11px}.bargain-calculation summary{font-weight:400;color:var(--muted);font-size:11px}
 .bargain-table th:first-child,.bargain-table td:first-child{min-width:0}.bargain-table th:nth-child(2),.bargain-table td:nth-child(2){min-width:210px}
+
+.bargain-controls .bargain-search{flex:1;min-width:180px}.bargain-search input{width:100%}.bargain-uses{font-size:12px;white-space:nowrap;color:var(--muted)}
+
+.bargain-use-list{margin:14px 0;font-size:12px}.bargain-use-list>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-top:12px}.bargain-use-list .item-label{font-size:12px}

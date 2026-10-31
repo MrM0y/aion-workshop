@@ -1,3 +1,6 @@
+import {mountSupplySignals} from './supply-signals.js';
+import {resourceUses} from './bargain-model.js';
+import {gradeClass} from './live-dom.js';
 import {resourcePolicy} from './resource-policy.js';
 import {createResourceExecutor} from './resource-executor.js';
 import {createGameCollector} from './game-collector.js';
@@ -22,7 +25,8 @@ const pct=value=>Number.isFinite(value)?num(value,1)+'%':'—';
 const risk=value=>value>0&&value<.001?'<0,1%':value>.999&&value<1?'>99,9%':pct(value===null?null:value*100);
 const defaults={version:2,server:'',view:'market',selected:'',settings:{count:10,limit:10,budget:'',query:'',category:'',freshMinutes:60,onlyFresh:false,includeFailures:true,includeSpecial:true,includeByproducts:true,auto:true,theme:'dark',screen:'market',itemsLanguage:'ru',mastery:100,sort:'roi',confidence:.99,gearCount:1,gearInventory:{}},profiles:[],markets:{},serversCache:[]};
 let db=structuredClone(defaults),catalog,items=new Map(),market=null,analysis=null,scanning=false,saveTimer,canSave=true,gearJob=0,worker,activePicker,gearView,activeInsights,purchaseView;
-let collector,openRecipeId=null,bargainView,showFirstHelp=false,localLab=null;
+let supplyView;
+let collector,openRecipeId=null,bargainView,bargainHost,bargainServer,showFirstHelp=false,localLab=null;
 let budgetPlans=new Map(),budgetMissing=[],budgetChecking=false,budgetSignature='',budgetTimer;
 const booksByServer=new Map();
 const booksFor=(id=db.server)=>{if(!booksByServer.has(id))booksByServer.set(id,{});return booksByServer.get(id);};
@@ -38,7 +42,7 @@ function profile(){
   return db.markets[db.server||'_unselected']??={overrides:{},custom:[],config:{},details:{},snapshot:null,receivedAt:null,batches:[],settings:{saleTax:10,listingTax:0,taxConfirmed:false}};
 }
 function icon(id){const item=items.get(String(id));return item?.icon?`<img class="item-icon" src="${esc(item.icon)}" alt="" loading="lazy">`:'<span class="item-icon missing-icon" aria-hidden="true">◇</span>';}
-function itemLabel(id,extra=''){return `<span class="item-label">${icon(id)}<span>${esc(name(id))}${extra?`<small>${extra}</small>`:''}</span></span>`;}
+function itemLabel(id,extra=''){return `<span class="item-label ${gradeClass(items.get(String(id))?.grade)}">${icon(id)}<span>${esc(name(id))}${extra?`<small>${extra}</small>`:''}</span></span>`;}
 async function api(url,options){const response=await fetch(url,options);const data=await response.json();if(!response.ok)throw Error(data.error||'Не вдалося отримати дані.');return data;}
 function notice(message){$('#status').textContent=message;}
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('shown');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('shown'),5000);}
@@ -53,7 +57,7 @@ function recalculate(){budgetSignature='';analysis=catalog&&market?analyzeMarket
 function age(at){const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(at))/60000));return !Number.isFinite(minutes)?'час невідомий':minutes<1?'щойно':minutes<60?`${minutes} хв тому`:minutes<1440?`${Math.floor(minutes/60)} год тому`:`${Math.floor(minutes/1440)} дн тому`;}
 function conditions(){
   const p=profile().settings,minutes=(Date.now()-Date.parse(market?.capturedAt))/60000,stale=market?._source?.stale||!Number.isFinite(minutes)||minutes>15;
-  return `<section class="market-status ${stale?'is-stale':''}" aria-label="Актуальність цін"><div class="market-freshness"><span class="freshness-dot"></span><div><small>Ціни ринку</small><strong>${market?esc(age(market.capturedAt)):'Ще не завантажені'}</strong></div><button type="button" class="secondary" id="refreshPrices" ${scanning?'disabled':''}>${scanning?'Оновлюю…':'Оновити'}</button></div><button type="button" class="capture-launch ${collector?.active?'is-active':''}" id="gameCollector"><span class="capture-symbol" aria-hidden="true">▣</span><span><strong>${collector?.active?'Збір із гри працює':'Збір із гри'}</strong><small>Ціни з твого екрана</small></span><span aria-hidden="true">→</span></button><button class="text-button market-settings" id="conditions">Комісії ${num(p.saleTax+p.listingTax,2)}% · Налаштувати</button></section>`;
+  return `<section class="market-status ${stale?'is-stale':''}" aria-label="Актуальність цін"><div class="market-freshness"><span class="freshness-dot"></span><div><small>Ціни ринку</small><strong>${market?esc(age(market.capturedAt)):'Ще не завантажені'}</strong></div><button type="button" class="secondary" id="refreshPrices" ${scanning?'disabled':''}>${scanning?'Оновлюю…':'Оновити'}</button></div><button type="button" class="capture-launch ${collector?.active?'is-active':''}" id="gameCollector"><span class="capture-symbol" aria-hidden="true">▣</span><span><strong>${collector?.active?'Збір із гри працює':'Збір із гри'}</strong><small>Ринок і поставки з твого екрана</small></span><span aria-hidden="true">→</span></button><button class="text-button market-settings" id="conditions">Комісії ${num(p.saleTax+p.listingTax,2)}% · Налаштувати</button></section>`;
 }
 function bindMarketStatus(){
   $('#conditions')?.addEventListener('click',preferences);
@@ -67,13 +71,14 @@ function header(){
   $('#marketPicker').onclick=picker;$('#settings').onclick=preferences;
   $('#language').onchange=event=>{db.settings.itemsLanguage=event.target.value;save();render();};
 }
-function render(){activePicker?.destroy();activePicker=null;gearView?.destroy();gearView=null;bargainView?.destroy();bargainView=null;header();document.documentElement.dataset.theme=db.settings.theme;db.settings.screen==='gear'?renderGear():db.settings.screen==='bargains'?renderBargains():renderMarket();bindMarketStatus();usageGuide.refresh();}
+function render(){supplyView?.destroy();supplyView=null;activePicker?.destroy();activePicker=null;gearView?.destroy();gearView=null;if(bargainView&&bargainServer!==db.server){bargainView.destroy();bargainView=null;bargainHost=null;}header();document.documentElement.dataset.theme=db.settings.theme;db.settings.screen==='gear'?renderGear():db.settings.screen==='bargains'?renderBargains():renderMarket();bindMarketStatus();ensureBargains();renderSupplySignals();usageGuide.refresh();}
 function budgetKey(){return JSON.stringify([db.server,db.settings.screen,db.settings.budget,db.settings.budgetEstimates,settings(),profile().overrides,profile().purchaseBooks,Object.entries(profile().screenBooks||{}).map(([id,book])=>[id,book.capturedAt]),market?._source?.fetchedAt]);}
 function matchesRecipe(row){const query=(db.settings.query||'').toLocaleLowerCase();return (!db.settings.recipeFilter?.recipeIds?.length||db.settings.recipeFilter.recipeIds.includes(row.recipeId))&&(!query||db.settings.recipeFilter?.itemId||[name(row.resultId),row.nameEn,row.nameRu].some(s=>s?.toLocaleLowerCase().includes(query)));}
 function plannedRisk(row,plan){const normal=row.outputs.find(out=>out.kind==='normal'),special=row.outputs.find(out=>out.kind==='special'),net=1-(profile().settings.saleTax+profile().settings.listingTax)/100;return batchLossProbability({batch:plan.attempts,normalProbability:normal?.probability||0,specialProbability:special?.probability||0,normalNet:normal?normal.quantity*normal.price*net:0,specialNet:special?special.quantity*special.price*net:0,fixedCost:plan.attempts?plan.cashRequired/plan.attempts:0});}
 function rankRows(){
   const query=(db.settings.query||'').toLocaleLowerCase();
   let rows=(analysis?.rows||[]).filter(matchesRecipe);
+  if(db.settings.favoriteRecipesOnly)rows=rows.filter(row=>(db.settings.favoriteRecipes||[]).includes(row.recipeId));
   if(hasBudget())rows=rows.filter(row=>budgetPlans.get(row.recipeId)?.best?.attempts>0).map(row=>{const entry=budgetPlans.get(row.recipeId),planned=entry.best;return {...compareRankedBatch(row,planned,entry.direct),lossProbability:entry.direct?.eligible?plannedRisk(row,entry.direct):null,etherLossProbability:plannedRisk(row,planned)};});
 
   rows=rows.map(row=>({...row,volume:row.liquidity?.fresh?row.liquidity.unitsSold:null}));
@@ -96,8 +101,9 @@ async function calculateBudget(refresh=true){
 function scheduleBudget(){clearTimeout(budgetTimer);if(db.settings.screen==='market'&&hasBudget()&&market&&analysis&&budgetSignature!==budgetKey()&&!budgetChecking)budgetTimer=setTimeout(()=>calculateBudget(),650);}
 function sortHeader(label,key){const selected=(db.settings.sort||'roi')===key,direction=db.settings.sortDirection||(['capital','ether','risk'].includes(key)?'asc':'desc');return `<th aria-sort="${selected?(direction==='asc'?'ascending':'descending'):'none'}"><button type="button" data-sort-key="${key}">${label}${selected?(direction==='asc'?' ↑':' ↓'):''}</button></th>`;}
 function renderMarket(){
-  $('#content').innerHTML=`<section class="intro"><div><h1>Що зараз вигідно крафтити?</h1></div><button class="primary scan" id="scan" ${scanning?'disabled':''}>${scanning?'Перевіряю ринок…':'Знайти вигідне'}<span aria-hidden="true">↗</span></button></section>${conditions()}<section class="panel results"><div class="toolbar"><input id="query" type="search" placeholder="Знайти предмет…" aria-label="Знайти предмет" value="${esc(db.settings.query)}"><select id="sort" aria-label="Сортування"><option value="roi">Більший % прибутку</option><option value="capital">Менше грошей на старт</option><option value="profit">Найбільший прибуток</option><option value="ether">Менше вкладень з ефіром</option><option value="etherProfit">Більший прибуток з ефіром</option><option value="etherRoi">Більший % з ефіром</option><option value="risk">Менший ризик крафту</option><option value="attempts">Більше спроб у партії</option></select><input id="budget" type="number" min="0" placeholder="Бюджет, Kinah" aria-label="Максимальний бюджет" value="${esc(db.settings.budget)}"></div><div id="budgetStatus"></div><div id="ranked"></div></section><div id="coverage"></div>`;
+  $('#content').innerHTML=`<section class="intro"><div><h1>Що зараз вигідно крафтити?</h1></div><button class="primary scan" id="scan" ${scanning?'disabled':''}>${scanning?'Перевіряю ринок…':'Знайти вигідне'}<span aria-hidden="true">↗</span></button></section>${conditions()}<div class="list-tabs" role="group" aria-label="Рецепти"><button type="button" data-recipe-list="all" aria-pressed="${!db.settings.favoriteRecipesOnly}">Усі</button><button type="button" data-recipe-list="favorites" aria-pressed="${!!db.settings.favoriteRecipesOnly}">★ Вибрані</button></div><section class="panel results"><div class="toolbar"><input id="query" type="search" placeholder="Знайти предмет…" aria-label="Знайти предмет" value="${esc(db.settings.query)}"><select id="sort" aria-label="Сортування"><option value="roi">Більший % прибутку</option><option value="capital">Менше грошей на старт</option><option value="profit">Найбільший прибуток</option><option value="ether">Менше вкладень з ефіром</option><option value="etherProfit">Більший прибуток з ефіром</option><option value="etherRoi">Більший % з ефіром</option><option value="risk">Менший ризик крафту</option><option value="attempts">Більше спроб у партії</option></select><input id="budget" type="number" min="0" placeholder="Бюджет, Kinah" aria-label="Максимальний бюджет" value="${esc(db.settings.budget)}"></div><div id="budgetStatus"></div><div id="ranked"></div></section><div id="coverage"></div>`;
   $('#scan').onclick=scan;
+  document.querySelectorAll('[data-recipe-list]').forEach(button=>button.onclick=()=>{db.settings.favoriteRecipesOnly=button.dataset.recipeList==='favorites';save();document.querySelectorAll('[data-recipe-list]').forEach(tab=>tab.setAttribute('aria-pressed',String((tab.dataset.recipeList==='favorites')===db.settings.favoriteRecipesOnly)));renderRows();});
   if(db.settings.sort==='volume')db.settings.sort='roi';
   $('#sort').value=db.settings.sort||'roi';
   for(const [id,key] of [['query','query'],['sort','sort'],['budget','budget']])$('#'+id).addEventListener(id==='sort'?'change':'input',event=>{db.settings[key]=event.target.value;if(id==='sort')db.settings.sortDirection=null;if(id==='budget'){budgetPlans=new Map();budgetSignature='';}if(id==='query'){db.settings.recipeFilter=null;activePicker?.update({filter:{}});}save();renderRows();scheduleBudget();});
@@ -125,7 +131,7 @@ function renderRows(){
   if(db.settings.recipeFilter?.label){const filter=document.createElement('div');filter.className='catalog-filter';filter.innerHTML=`<span>${esc(db.settings.recipeFilter.label)}</span><button class="text-button" type="button">Усі рецепти ×</button>`;$('#ranked').before(filter);filter.querySelector('button').onclick=()=>{db.settings.recipeFilter=null;db.settings.query='';$('#query').value='';activePicker?.update({filter:{}});save();renderRows();};}
   if(!market){$('#ranked').innerHTML=`<div class="empty"><span class="empty-symbol">↗</span><h2>${db.server?'Ринок готовий до перевірки':'Спочатку обери свій сервер'}</h2><p>${db.server?'Натисни «Знайти вигідне» — покажу рецепти з поточними цінами.':'Ціни залежать від регіону, сервера та фракції.'}</p>${!db.server?'<button class="secondary" id="chooseServer">Обрати сервер</button>':''}</div>`;$('#chooseServer')?.addEventListener('click',picker);return;}
     const favorites=new Set(db.settings.favoriteRecipes||[]);
-  $('#ranked').innerHTML=rows.length?`<div class="table-scroll"><table class="ranking"><thead><tr><th class="favorite-column"><span aria-label="Вибране">★</span></th><th>Предмет</th>${sortHeader('Вкласти','capital')}${sortHeader('З ефіром','ether')}${sortHeader('Прибуток','profit')}${sortHeader('Дохідність','roi')}</tr></thead><tbody>${rows.slice(0,limit).map(row=>`<tr data-recipe="${row.recipeId}" tabindex="0" role="button" aria-label="Розібрати ${esc(name(row.resultId))}"><td><button type="button" class="favorite-button" data-favorite-recipe="${esc(row.recipeId)}" aria-label="У вибране: ${esc(name(row.resultId))}" aria-pressed="${favorites.has(row.recipeId)}">${favorites.has(row.recipeId)?'★':'☆'}</button></td><td>${itemLabel(row.resultId)}<small class="recipe-yield">${num(row.recipe.yield)} шт.</small></td><td>${money(row.investment)}</td><td class="ether-cell"><strong>${money(row.etherInvestment)}</strong>${row.etherAvailable&&row.etherSavings>0?`<small>−${money(row.etherSavings)}</small>`:''}</td><td class="${row.profit>=0?'profit':'loss'}">${row.profit>0?'+':''}${money(row.profit)}</td><td><span class="roi ${row.roi>=0?'positive':'negative'}">${row.roi>0?'+':''}${pct(row.roi)}</span></td></tr>`).join('')}</tbody></table></div><div class="table-footer"><span>${Math.min(limit,rows.length)} / ${rows.length}</span><label>Показати <select id="limit">${[10,20,30,40,50,100].map(n=>`<option ${n===limit?'selected':''}>${n}</option>`).join('')}</select></label></div>`:`<div class="empty"><h2>${budgetChecking?'Рахую…':hasBudget()?'Немає закупівлі в межах бюджету':'Нічого не знайдено'}</h2></div>`;
+  $('#ranked').innerHTML=rows.length?`<div class="table-scroll"><table class="ranking"><thead><tr><th class="favorite-column"><span aria-label="Вибране">★</span></th><th>Предмет</th>${sortHeader('Вкласти','capital')}${sortHeader('З ефіром','ether')}${sortHeader('Прибуток','profit')}${sortHeader('Дохідність','roi')}</tr></thead><tbody>${rows.slice(0,limit).map(row=>`<tr data-recipe="${row.recipeId}" tabindex="0" role="button" aria-label="Розібрати ${esc(name(row.resultId))}"><td><button type="button" class="favorite-button" data-favorite-recipe="${esc(row.recipeId)}" aria-label="У вибране: ${esc(name(row.resultId))}" aria-pressed="${favorites.has(row.recipeId)}">${favorites.has(row.recipeId)?'★':'☆'}</button></td><td>${itemLabel(row.resultId)}${row.recipe.yield>1?`<small class="recipe-yield">${num(row.recipe.yield)} шт.</small>`:''}</td><td>${money(row.investment)}</td><td class="ether-cell"><strong>${money(row.etherInvestment)}</strong>${row.etherAvailable&&row.etherSavings>0?`<small>−${money(row.etherSavings)}</small>`:''}</td><td class="${row.profit>=0?'profit':'loss'}">${row.profit>0?'+':''}${money(row.profit)}</td><td><span class="roi ${row.roi>=0?'positive':'negative'}">${row.roi>0?'+':''}${pct(row.roi)}</span></td></tr>`).join('')}</tbody></table></div><div class="table-footer"><span>${Math.min(limit,rows.length)} / ${rows.length}</span><label>Показати <select id="limit">${[10,20,30,40,50,100].map(n=>`<option ${n===limit?'selected':''}>${n}</option>`).join('')}</select></label></div>`:`<div class="empty"><h2>${budgetChecking?'Рахую…':hasBudget()?'Немає закупівлі в межах бюджету':db.settings.favoriteRecipesOnly?'У вибраному поки порожньо':'Нічого не знайдено'}</h2></div>`;
   document.querySelectorAll('[data-favorite-recipe]').forEach(button=>{button.onclick=event=>{event.stopPropagation();const id=button.dataset.favoriteRecipe,set=new Set(db.settings.favoriteRecipes||[]);set.has(id)?set.delete(id):set.add(id);db.settings.favoriteRecipes=[...set];save();renderRows();};button.onkeydown=event=>event.stopPropagation();});
   document.querySelectorAll('[data-sort-key]').forEach(button=>button.onclick=()=>{const key=button.dataset.sortKey,previous=db.settings.sort||'roi',direction=db.settings.sortDirection||(['capital','ether'].includes(key)?'asc':'desc');db.settings.sortDirection=previous===key?(direction==='asc'?'desc':'asc'):(['capital','ether'].includes(key)?'asc':'desc');db.settings.sort=key;$('#sort').value=key;save();renderRows();});
   if($('#limit'))$('#limit').onchange=event=>{db.settings.limit=Number(event.target.value);save();renderRows();};
@@ -184,10 +190,10 @@ function recipeDialog(recipeId){
   openRecipeId=recipeId;activeInsights?.destroy();activeInsights=null;purchaseView?.destroy();purchaseView=null;
   const recipe=catalog.recipes.find(value=>String(value.id)===recipeId),row=analysis?.rows.find(value=>value.recipeId===recipeId);if(!recipe)return;
   const outputIds=[...new Set([recipe.resultId,recipe.comboResultId].filter(Boolean).map(String))];
-  dialog(name(recipe.resultId),`<section class="recipe-workspace"><div id="purchaseWorkspace"></div><details class="recipe-market"><summary>Історія ціни</summary><div id="recipeInsights"></div></details></section>`,true);
+  dialog(name(recipe.resultId),`<section class="recipe-workspace"><div id="purchaseWorkspace"></div><section class="recipe-market"><div id="recipeInsights"></div></section></section>`,true);
   if(!row){$('#purchaseWorkspace').innerHTML='<p>Потрібні ціни матеріалів.</p><button type="button" class="primary" id="recipeCapture">Зчитати з гри</button>';$('#recipeCapture').onclick=()=>collector.show();return;}
   purchaseView=mountPurchasePlan($('#purchaseWorkspace'),{row,catalog,market,faction:faction(),mastery:db.settings.mastery,resourceSettings:settings(),server:db.server,api,books:booksFor(),manualBooks:{...(profile().purchaseBooks??={}),...profile().screenBooks},overrides:profile().overrides,language,...(profile().purchaseSettings?.[recipeId]||{}),budget:hasBudget()?db.settings.budget:(profile().purchaseSettings?.[recipeId]?.budget||''),...profile().settings,onCapture:()=>collector.show(),onUnitPrice:(id,price)=>{storePrice(id,price);const next=analysis?.rows.find(value=>value.recipeId===recipeId);if(next)purchaseView?.updateRow(next);renderRows();},onPreferences:patch=>{profile().purchaseSettings??={};profile().purchaseSettings[recipeId]={...(profile().purchaseSettings[recipeId]||{}),...patch};save();},onBook:(id,book)=>{if(book)profile().purchaseBooks[id]=book;else delete profile().purchaseBooks[id];save();},onReady:()=>{if(hasBudget())calculateBudget(false);}});
-  const details=$('.recipe-market');details.addEventListener('toggle',()=>{if(!details.open||activeInsights)return;const id=outputIds[0];activeInsights=mountMarketInsights($('#recipeInsights'),{server:db.server,itemId:id,api,price:quote(id).price,onPriceChange:price=>{storePrice(id,price);const next=analysis?.rows.find(value=>value.recipeId===recipeId);if(next)purchaseView?.updateRow(next);renderRows();}});});
+  const id=outputIds[0];activeInsights=mountMarketInsights($('#recipeInsights'),{server:db.server,itemId:id,api,price:quote(id).price,onPriceChange:price=>{storePrice(id,price);const next=analysis?.rows.find(value=>value.recipeId===recipeId);if(next)purchaseView?.updateRow(next);renderRows();}});
 }
 async function refreshBargainMarket(){
   if(!db.server)return null;
@@ -195,13 +201,33 @@ async function refreshBargainMarket(){
   if(db.server!==selectedServer)throw Error('Сервер змінився.');
   market=overlayScreenPrices(result,profile().screenBooks,Date.now(),profile().screenQuotes);profile().marketV2=market;recalculate();save();
   const conditionsHost=$('#bargainConditions');if(conditionsHost){conditionsHost.innerHTML=conditions();bindMarketStatus();}
+  if(db.settings.screen==='market'&&!$('#modal')?.children.length)renderRows();
+  const freshness=$('.market-freshness strong');if(freshness){freshness.textContent=age(market.capturedAt);$('.market-status')?.classList.toggle('is-stale',market._source?.stale===true||!Number.isFinite(Date.parse(market.capturedAt))||Date.now()-Date.parse(market.capturedAt)>900000);}
   return market;
 }
 function renderBargains(){
   $('#content').innerHTML=`<div id="bargainConditions">${conditions()}</div><div id="bargainWorkspace"></div>`;
-  bargainView=mountBargainView($('#bargainWorkspace'),{catalog,market,server:db.server,api,language,budget:db.settings.bargainBudget??'',purpose:db.settings.bargainPurpose||'craft',favorites:db.settings.favoriteItems||[],onFavorites:value=>{db.settings.favoriteItems=value;save();},onPurpose:value=>{db.settings.bargainPurpose=value;save();},saleTax:profile().settings.saleTax+profile().settings.listingTax,books:{...booksFor(),...profile().screenBooks},onBudget:value=>{db.settings.bargainBudget=value;save();},onRefreshMarket:refreshBargainMarket,onInspect:id=>{
-    dialog(name(id),`<div class="bargain-inspect-label">${itemLabel(id)}</div><div id="bargainInsights"></div>`,true);
+  ensureBargains();
+  if(bargainView){$('#bargainWorkspace').replaceWith(bargainHost);bargainView.update({market,books:{...booksFor(),...profile().screenBooks},saleTax:profile().settings.saleTax+profile().settings.listingTax});}
+}
+/** One scan per selected market starts at boot and survives navigation. */
+function ensureBargains(){
+  if(bargainView||!catalog||!db.server)return;
+  bargainHost=document.createElement('div');bargainHost.id='bargainWorkspace';bargainServer=db.server;
+  bargainView=mountBargainView(bargainHost,{catalog,market,server:db.server,api,language,budget:db.settings.bargainBudget??'',purpose:db.settings.bargainPurpose||'stock',faction:faction(),favoritesOnly:db.settings.favoriteItemsOnly===true,onFavoritesOnly:value=>{db.settings.favoriteItemsOnly=value;save();},favorites:db.settings.favoriteItems||[],onFavorites:value=>{db.settings.favoriteItems=value;save();},onPurpose:value=>{db.settings.bargainPurpose=value;save();},saleTax:profile().settings.saleTax+profile().settings.listingTax,books:{...booksFor(),...profile().screenBooks},onBudget:value=>{db.settings.bargainBudget=value;save();},onRefreshMarket:refreshBargainMarket,onInspect:id=>{
+    const uses=resourceUses(catalog,{faction:faction()}).get(id)||[];
+    dialog(name(id),`<div class="bargain-inspect-label">${itemLabel(id)}</div>${uses.length?`<details class="bargain-use-list"><summary>Що можна скрафтити · ${num(uses.length)}</summary><div>${uses.slice(0,12).map(recipe=>itemLabel(recipe.resultId)).join('')}</div></details>`:''}<div id="bargainInsights"></div>`,true);
     activeInsights=mountMarketInsights($('#bargainInsights'),{server:db.server,itemId:id,api,price:quote(id).price});
+  }});
+}
+function renderSupplySignals(){
+  if(!db.server||db.settings.screen==='gear')return;
+  const host=document.createElement('div');host.className='supply-workspace';
+  const tabs=$('#content .list-tabs');if(tabs)tabs.before(host);else $('#content').prepend(host);
+  supplyView=mountSupplySignals(host,{server:db.server,api,catalog,rows:()=>analysis?.rows||[],language,onOpen:(id,recipeId)=>{
+    if(recipeId){recipeDialog(recipeId);return;}
+    dialog(name(id),`<div class="bargain-inspect-label">${itemLabel(id)}</div><div id="supplyInsights"></div>`,true);
+    activeInsights=mountMarketInsights($('#supplyInsights'),{server:db.server,itemId:id,api,price:quote(id).price});
   }});
 }
 function calculateGear(options){
@@ -214,6 +240,7 @@ function renderGear(){
 }
 function initializeCollector(){
   collector=createGameCollector({api,dialog,lab:localLab,context:()=>({serverId:db.server,serverLabel:server()?`${server().region} · ${server().name} · ${server().faction==='Elyos'?'Елійці':'Асмодіани'}${localLab?.enabled?' · серверна біржа':''}`:db.server,labMarket:{region:server()?.region,serverId:db.server,faction:faction(),exchange:'server'},language:language(),records:profile().saleRecords||[]}),onStatus:state=>{const button=$('#gameCollector');if(button){const title=button.querySelector('strong');if(title)title.textContent=state.active?'Збір із гри працює':'Збір із гри';button.classList.toggle('is-active',state.active);button.title=state.message;}},onRecords:records=>{profile().saleRecords=records;save();},onFrame:result=>{
+    if(result.supply?.observations?.length)supplyView?.refresh();
     const p=profile();p.screenBooks??={};p.screenQuotes??={};
     for(const id of result.expiredIds||[]){const book=p.screenBooks[id];if(book?.source?.aggregation!=='local-lab')continue;book.fresh=false;if(booksFor()[id]?.source?.aggregation==='local-lab')booksFor()[id].fresh=false;const current=market?.items.find(item=>String(item.id)===id);if(current?.priceProvenance==='screen-ocr'&&Date.parse(current.capturedAt)<=Date.parse(book.capturedAt))current.sourceStale=true;}
     mergePurchaseBooks(booksFor(),result.books||{});
@@ -246,7 +273,7 @@ boot();
 let checkingSnapshot=false;
 setInterval(async()=>{
   const freshness=$('.market-freshness strong');if(freshness&&market){freshness.textContent=age(market.capturedAt);$('.market-status')?.classList.toggle('is-stale',market._source?.stale===true||!Number.isFinite(Date.parse(market.capturedAt))||Date.now()-Date.parse(market.capturedAt)>900000);}
-  if(checkingSnapshot||scanning||!market||!db.server||db.settings.auto===false||document.visibilityState!=='visible'||$('#modal')?.children.length||document.activeElement?.matches('input,select,textarea'))return;
+  if(db.settings.screen==='bargains'||checkingSnapshot||scanning||!market||!db.server||db.settings.auto===false||document.visibilityState!=='visible'||$('#modal')?.children.length||document.activeElement?.matches('input,select,textarea'))return;
   checkingSnapshot=true;const selectedServer=db.server;
   try{
     const health=await api(`/api/health?server=${encodeURIComponent(selectedServer)}`);

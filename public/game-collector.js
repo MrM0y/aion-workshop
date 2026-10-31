@@ -1,3 +1,4 @@
+import {gradeClass} from './live-dom.js';
 import {applySaleEvents} from './sale-model.js';
 import {renderLocalLab} from './local-lab-view.js';
 import {createCaptureGate,tableFingerprint} from './capture-gate.js';
@@ -41,23 +42,23 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
   }
   function renderOverview(selected=context()){
     const preview=document.querySelector('#collectorOverview'),quotes=diagnostics?.quotes||[];if(!preview)return;
-    preview.innerHTML=quotes.length?`<div class="table-scroll"><table><thead><tr><th>Предмет</th><th>Від, Kinah</th><th>Оголошень</th></tr></thead><tbody>${quotes.map(quote=>{const item=diagnostics.items?.find(item=>String(item.id)===quote.id);return `<tr><td>${esc(selected.language==='ru'?item?.nameRu||item?.nameEn||quote.id:item?.nameEn||quote.id)}</td><td>${quote.price===null?'—':esc(quote.price.toLocaleString('uk-UA'))}</td><td>${esc(quote.listings)}</td></tr>`;}).join('')}</tbody></table></div>`:'';
+    preview.innerHTML=quotes.length?`<div class="table-scroll"><table><thead><tr><th>Предмет</th><th>Від, Kinah</th><th>Оголошень</th></tr></thead><tbody>${quotes.map(quote=>{const item=diagnostics.items?.find(item=>String(item.id)===quote.id);return `<tr><td><span class="${gradeClass(item?.grade)}"><span>${esc(selected.language==='ru'?item?.nameRu||item?.nameEn||quote.id:item?.nameEn||quote.id)}</span></span></td><td>${quote.price===null?'—':esc(quote.price.toLocaleString('uk-UA'))}</td><td>${esc(quote.listings)}</td></tr>`;}).join('')}</tbody></table></div>`:'';
     if(quotes.length)document.querySelector('.modal')?.classList.add('wide');
   }
   async function consume(image,capturedAt=new Date().toISOString(),live=false){
     const selected=context(),capturedStream=stream;if(!selected.serverId)throw Error('Спершу обери сервер.');
     if(!live||!diagnostics)update('Читаю весь видимий список…');
-    const result=await api('/api/collector/recognize',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(20000),body:JSON.stringify({image,capturedAt,language:selected.language==='ru'?'ru-RU':'en-US',serverId:selected.serverId,...(lab?.enabled?{labMarket:selected.labMarket,sampleOnly:!live}:{})})});
+    const result=await api('/api/collector/recognize',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(20000),body:JSON.stringify({image,capturedAt,language:selected.language==='ru'?'ru-RU':'en-US',serverId:selected.serverId,sampleOnly:!live,...(lab?.enabled?{labMarket:selected.labMarket}:{})})});
     if(!captureMatchesSession({capturedServer:selected.serverId,currentServer:context().serverId,live,capturedStream,currentStream:stream}))return;
     if(result.available!==true){update(result.reason||'Windows OCR недоступне');return false;}
-    const content=JSON.stringify([selected.serverId,result.taxRate,Object.entries(result.books||{}).map(([id,book])=>[id,book.levels,book.expiresAt]),(result.quotes||[]).map(({id,price,listings})=>[id,price,listings])]);
+    const content=JSON.stringify([selected.serverId,result.taxRate,result.supply?.observations,Object.entries(result.books||{}).map(([id,book])=>[id,book.levels,book.expiresAt]),(result.quotes||[]).map(({id,price,listings})=>[id,price,listings])]);
     if(!result.sampleOnly&&content!==lastApplied){onFrame?.(result);lastApplied=content;}if(live&&stream&&!result.sampleOnly)reconcile(result.candidates||[]);
     diagnostics={...result.diagnostics,sampleOnly:result.sampleOnly===true,sampleBooks:result.sampleOnly?result.books:null};const count=diagnostics?.lots??Object.values(result.books||{}).reduce((sum,book)=>sum+book.levels.length,0);
     const quoteCount=result.quotes?.length||0;
-    update(quoteCount?`Зібрано ${quoteCount} предметів · мінімальні ціни й оголошення · ${(diagnostics.durationMs/1000).toFixed(2)} с`:result.lab?.ok===false?result.lab.error:count?`Весь кадр: ${count} лотів${result.sampleOnly?' · тестове зображення':result.lab?.duplicates?' · без змін':''} · ${(diagnostics.durationMs/1000).toFixed(2)} с`:result.reason||'Не розпізнав список — продовжую зчитування');
+    update(result.supply?.observations?.length?`Поставку зчитано · ${result.supply.observations.length} предмет`:quoteCount?`Зібрано ${quoteCount} предметів · мінімальні ціни й оголошення · ${(diagnostics.durationMs/1000).toFixed(2)} с`:result.lab?.ok===false?result.lab.error:count?`Весь кадр: ${count} лотів${result.sampleOnly?' · тестове зображення':result.lab?.duplicates?' · без змін':''} · ${(diagnostics.durationMs/1000).toFixed(2)} с`:result.reason||'Не розпізнав список — продовжую зчитування');
     renderOverview(selected);
     if(lab?.enabled)refreshLab();
-    return count>0||quoteCount>0;
+    return count>0||quoteCount>0||result.supply?.observations?.length>0;
   }
   async function drainFrames(){
     if(busy||!pendingFrame||!stream)return;busy=true;
@@ -137,7 +138,7 @@ export function createGameCollector({api,dialog,context,onFrame,onRecords,onStat
     }catch(error){update(error.message);}finally{busy=false;input.value='';drainFrames();}
   }
   function show(){
-    dialog('Зчитування з гри',`<p>Вибери вікно AION 2 один раз. Далі читатиму видимі лоти й повідомлення автоматично.</p><p class="muted">Ринок: ${esc(context().serverLabel||context().serverId)}. Розпізнавання — на цьому комп’ютері.</p><button type="button" class="primary" id="collectorStart">${stream?'Зупинити зчитування':'Вибрати вікно гри'}</button><p id="collectorStatus" role="status">${esc(status)}</p><label class="secondary collector-upload">Зчитати скриншот<input id="collectorImage" type="file" accept="image/png" hidden></label><div id="collectorPending"></div><details><summary>Мої підтверджені продажі · ${(context().records||[]).length} лотів</summary><p>Старий чат і зниклі оголошення не вважаються продажем. Невідомий час або неоднозначні повідомлення не потрапляють у прогноз.</p><label>Імпортувати журнал подій<input id="collectorEvents" type="file" accept="application/json,.json"></label><p id="collectorImportStatus" role="status"></p></details>`);
+    dialog('Зчитування з гри',`<p>Вибери вікно AION 2 один раз. Далі читатиму ринок і деталі поставок й повідомлення автоматично.</p><p class="muted">Ринок: ${esc(context().serverLabel||context().serverId)}. Розпізнавання — на цьому комп’ютері.</p><button type="button" class="primary" id="collectorStart">${stream?'Зупинити зчитування':'Вибрати вікно гри'}</button><p id="collectorStatus" role="status">${esc(status)}</p><label class="secondary collector-upload">Зчитати скриншот<input id="collectorImage" type="file" accept="image/png" hidden></label><div id="collectorPending"></div><details><summary>Мої підтверджені продажі · ${(context().records||[]).length} лотів</summary><p>Старий чат і зниклі оголошення не вважаються продажем. Невідомий час або неоднозначні повідомлення не потрапляють у прогноз.</p><label>Імпортувати журнал подій<input id="collectorEvents" type="file" accept="application/json,.json"></label><p id="collectorImportStatus" role="status"></p></details>`);
     const overview=document.createElement('div');overview.id='collectorOverview';document.querySelector('#collectorStatus').after(overview);renderOverview();
     document.querySelector('#collectorStart').onclick=()=>stream?stop():start();
     if(lab?.enabled){
