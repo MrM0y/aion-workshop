@@ -1,3 +1,4 @@
+import {resourcePolicy} from '../public/resource-policy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -105,4 +106,17 @@ test('nested reference routes scale their steps per root unit and preserve oldes
   const result=createResourceRouter({catalog:c,quote:id=>({price:{ore:100,wood:1000,ether:4,salt:2}[id],source:'market',at:id==='salt'?'2026-10-28T10:00Z':'2026-10-28T11:00Z'})}).quote('wood');
   assert.equal(result.price,7);assert.equal(result.steps.find(step=>step.recipeId==='ore').attemptsPerUnit,.75);
   assert.equal(result.inputs.find(input=>input.id==='ether').quantity,1.5);assert.equal(result.at,'2026-10-28T10:00Z');
+});
+
+test('all 42 shipped gathering substitutes use matching faction and actual ether grade',async()=>{
+  const c=JSON.parse(await readFile(new URL('../public/data/catalog.json',import.meta.url),'utf8')),policy=resourcePolicy(c),items=new Map(c.items.map(row=>[row.id,row]));
+  assert.equal(Object.keys(policy.substitutions).length,42);
+  for(const [id,variants] of Object.entries(policy.substitutions)){
+    const source=c.recipes.find(recipe=>variants.includes(recipe.resultId)&&recipe.section==='conversion'&&/^Gather_/.test(recipe.category));assert.ok(source,id);
+    const faction=source.race==='Light'?'Elyos':'Asmodian';
+    const route=createResourceRouter({catalog:c,...policy,faction,quote:id=>({price:/Odyle/.test(items.get(id)?.nameEn||'')?10:1000,source:'market'})}).quote(id);
+    assert.equal(route.kind,'produce',id);assert.ok(route.price<1000,id);assert.ok(route.inputs.some(input=>/Odyle/.test(items.get(input.id)?.nameEn||'')),id);
+    assert.equal(items.get(id).grade,items.get(source.materials[0].itemId).grade,id+' uses correct grade');
+    const direct=createResourceRouter({catalog:c,...policy,faction,quote:id=>({price:id===source.materials[0].itemId?1000:1,source:'market'})}).quote(id);assert.equal(direct.price,1,id+' does not force expensive ether');
+  }
 });

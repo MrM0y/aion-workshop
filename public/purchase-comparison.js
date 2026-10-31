@@ -9,8 +9,8 @@ export function compareResourcePurchase(options){
   const now=options.now??Date.now(),base={...options,now};
   function evaluate(resourceOptions){
     const exact=acquisitionBatch({...base,resourceOptions,allowFlatEstimates:false});
-    if(exact.eligible)return {...exact,priceOnly:false};
     const estimate=acquisitionBatch({...base,resourceOptions,allowFlatEstimates:true});
+    if(exact.eligible&&(!estimate.eligible||exact.investment<=estimate.investment))return {...exact,priceOnly:false};
     return estimate.eligible?{...estimate,priceOnly:true}:exact;
   }
   const direct=evaluate(null),ether=options.resourceOptions?evaluate(options.resourceOptions):direct;

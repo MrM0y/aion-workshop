@@ -1,5 +1,6 @@
 import {createResourceRouter} from './resource-routes.js';
 import {resourcePolicy} from './resource-policy.js';
+import {transferRates} from './transfer-rules.js';
 const number = value => typeof value==='number' && Number.isFinite(value) && value>=0;
 const probability = value => number(value) && value<=1;
 const currencyIds = new Set(['930100030','930100031']);
@@ -82,12 +83,13 @@ export function rateFor(recipe,catalog,mastery=100) {
   };
   const curveKeys=Array.isArray(recipe.rate)?recipe.rate:[];
   const baseCurve=curveRate(curveKeys[0]);
-  const base=baseCurve??(probability(recipe.successRate)?recipe.successRate:null);
+  const transfer=transferRates(recipe);
+  const base=baseCurve??(probability(recipe.successRate)?recipe.successRate:transfer?.base??null);
   const hasCombo=recipe.comboResultId!=null;
   const activation=hasCombo?(probability(recipe.comboProbability)?recipe.comboProbability:null):0;
-  const combo=hasCombo&&activation!==0?(curveRate(curveKeys[1])??(probability(recipe.comboSuccessRate)?recipe.comboSuccessRate:null)):1;
+  const combo=hasCombo&&activation!==0?(curveRate(curveKeys[1])??(probability(recipe.comboSuccessRate)?recipe.comboSuccessRate:transfer?.combo??null)):1;
   const known=probability(base)&&probability(activation)&&probability(combo);
-  return {base,activation,combo,known,available:true,source:baseCurve!==null?(recipe.rateSourceUrl||catalog.rateSource?.url||'catalog.curves'):(recipe.sourceUrl||null),...(!known?{reason:'Джерело не надало повні шанси рецепта'}:{})};
+  return {base,activation,combo,known,available:true,source:baseCurve!==null?(recipe.rateSourceUrl||catalog.rateSource?.url||'catalog.curves'):(transfer?.source||recipe.sourceUrl||null),...(!known?{reason:'Джерело не надало повні шанси рецепта'}:{})};
 }
 
 export function isGearItem(itemOrId) {

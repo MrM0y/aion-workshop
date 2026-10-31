@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planGear} from '../public/gear-model.js';
+import {planGear,priceGear} from '../public/gear-model.js';
 const material=(id,price=10,quantity=1)=>({id,name:id,price,quantity});
 const stage=(id,probability=1,materials=[material('ore')])=>({id,name:id,successRate:1,comboProbability:probability,comboSuccessRate:1,materials,fee:0});
 const plan=extra=>planGear({stages:[stage('gold',.25)],targetCount:1,confidence:.95,iterations:30000,seed:123,...extra});
@@ -95,4 +95,16 @@ test('invalid requests return issues instead of misleading financial estimates',
   for(const input of [{targetCount:0},{confidence:0},{confidence:1.1},{inventory:[-1]},{inventory:[null]},{inventory:12},{iterations:5},{materialInventory:null},{stages:[]}] ){
     const c=plan(input);assert.equal(c.eligible,false);assert.equal(c.quantileCost,null);
   }
+});
+
+test('a useful combo skips the following guaranteed transfer without consuming another donor',()=>{
+  const stages=[stage('normal',1,[material('ore',10)]),{...stage('splendent',1,[material('stone',100)]),predecessorBypassProbability:.25}];
+  const p=planGear({stages,iterations:30000,confidence:.99});assert.equal(p.eligible,true);assert.deepEqual(p.expectedAttempts,[1,.75]);assert.equal(p.expectedCost,85);assert.equal(p.quantileCost,110);
+  const owned=planGear({stages,inventory:{normal:1},iterations:1000});assert.equal(owned.expectedCost,100);assert.deepEqual(owned.expectedAttempts,[0,1]);
+  assert.equal(planGear({stages,confidence:1,iterations:1000}).quantileCost,110);
+  const invalid=planGear({stages:[{...stages[0],predecessorBypassProbability:.25}]});assert.equal(invalid.eligible,false);
+});
+test('missing price preserves quantities and priced subtotal, never a complete or zero-price budget',()=>{
+  const p=priceGear({stages:[stage('gold',1,[material('ore',10,3),material('unknown',null,2)])]});
+  assert.equal(p.eligible,false);assert.equal(p.partial,true);assert.equal(p.partialCost,30);assert.equal(p.expectedCost,null);assert.equal(p.quantileCost,null);assert.deepEqual(p.missingPriceIds,['unknown']);assert.equal(p.expectedMaterials.find(row=>row.id==='unknown').cost,null);assert.equal(p.expectedMaterials.find(row=>row.id==='unknown').quantity,2);
 });

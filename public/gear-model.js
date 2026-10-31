@@ -143,17 +143,21 @@ export function planGear(input = {}) {
       else if (old.price !== row.price) old.price = null;
     }
   });
+  const bypass=stages.map(stage=>stage.predecessorBypassProbability??0);
+  bypass.forEach((value,i)=>{if(!nonnegative(value)||value>1||value>0&&(i===0||probabilities[i]!==1||multipliers[i]!==1))addIssue('Некоректний перехід до готового COMBO.');});
   if (issues.length) return empty();
   const materials = [...materialMap.values()], materialIndex = new Map(materials.map((row,i)=>[row.id,i]));
   // Even a very rare stock shortage must not become a free price just because
   // it happened not to appear in a finite simulation sample.
-  const maximumQuantities=materials.map(()=>0);
+  const maximumQuantities=materials.map(()=>0),maximumAttemptsByStage=stages.map(()=>0);
   let maximumNeed=Math.max(0,targetCount-owned.at(-1)), randomNeeded=false;
   for(let i=stages.length-1;i>=0;i--){
-    const maximumAttempts=maximumNeed===0?0:probabilities[i]===1?maximumNeed:Infinity;
+    const fresh=bypass[i]>0?Math.max(0,maximumNeed-owned[i-1]):0;
+    const maximumAttempts=bypass[i]>0?maximumNeed-fresh+(bypass[i]===1?0:fresh):maximumNeed===0?0:probabilities[i]===1?maximumNeed:Infinity;
+    maximumAttemptsByStage[i]=maximumAttempts;
     if(maximumNeed>0&&probabilities[i]<1)randomNeeded=true;
     for(const row of stages[i].materials)if(row.quantity>0)maximumQuantities[materialIndex.get(row.id)]+=maximumAttempts*row.quantity;
-    maximumNeed=i>0?Math.max(0,maximumAttempts*multipliers[i]-owned[i-1]):0;
+    maximumNeed=bypass[i]>0?fresh:i>0?Math.max(0,maximumAttempts*multipliers[i]-owned[i-1]):0;
   }
   maximumQuantities.forEach((quantity,i)=>{if(quantity>materials[i].owned&&!nonnegative(materials[i].price))addIssue(`Потрібна ціна матеріалу «${materials[i].name}».`);});
   if (confidence === 1 && randomNeeded) addIssue('За випадкових незалежних спроб немає скінченного бюджету зі 100% гарантією. Обери 95%, 99% або 99,9%.');
@@ -161,15 +165,17 @@ export function planGear(input = {}) {
   const expectedAnalytical = stages.map(()=>0);
   let need = Math.max(0,targetCount-owned.at(-1));
   for (let i=stages.length-1;i>=0;i--) {
-    expectedAnalytical[i] = need/probabilities[i];
+    const fresh=bypass[i]>0?Math.max(0,need-owned[i-1]):0;
+    expectedAnalytical[i] = bypass[i]>0?need-fresh+fresh*(1-bypass[i]):need/probabilities[i];
     if (!Number.isFinite(expectedAnalytical[i]) || expectedAnalytical[i]>1e9) addIssue('Ланцюг потребує надто великої кількості спроб для надійного розрахунку.');
-    need = Math.max(0,expectedAnalytical[i]*multipliers[i]-(i>0?owned[i-1]:0));
+    need = bypass[i]>0?fresh:Math.max(0,expectedAnalytical[i]*multipliers[i]-(i>0?owned[i-1]:0));
   }
   if (issues.length) return empty();
   const attemptsSum=stages.map(()=>0), quantitiesSum=materials.map(()=>0), boughtSum=materials.map(()=>0), costs=[];
   const acquisition=input.resourceOptions, acquisitionCache=new Map(),purchaseSums=new Map();
-  const sampleAttempts=samplers(randomGenerator(seed));
-  const deterministic=probabilities.every(p=>p===1), runs=deterministic?1:iterations;
+  const random=randomGenerator(seed),sampleAttempts=samplers(random);
+  const binomial=(count,p)=>{if(p===0)return 0;if(p===1)return count;let total=0;for(let n=0;n<count;n++)if(random()<p)total++;return total;};
+  const deterministic=probabilities.every(p=>p===1)&&bypass.every(p=>p===0||p===1), runs=deterministic?1:iterations;
   let costSum=0,costSquares=0;
   function costOf(attempts) {
     const quantities=materials.map(()=>0);
@@ -194,9 +200,10 @@ export function planGear(input = {}) {
     const attempts=stages.map(()=>0);
     let required=Math.max(0,targetCount-owned.at(-1));
     for(let i=stages.length-1;i>=0;i--) {
-      attempts[i]=sampleAttempts(required,probabilities[i]);
+      const fresh=bypass[i]>0?Math.max(0,required-owned[i-1]):0;
+      attempts[i]=bypass[i]>0?required-fresh+binomial(fresh,1-bypass[i]):sampleAttempts(required,probabilities[i]);
       if(!integer(attempts[i])||attempts[i]>1e12) {addIssue('Кількість спроб перевищує межі розрахунку.');return empty();}
-      required=Math.max(0,attempts[i]*multipliers[i]-(i>0?owned[i-1]:0));
+      required=bypass[i]>0?fresh:Math.max(0,attempts[i]*multipliers[i]-(i>0?owned[i-1]:0));
     }
     const trial=costOf(attempts);
     if(!nonnegative(trial.cost)){addIssue('Вартість перевищує межі розрахунку.');return empty();}
@@ -225,6 +232,7 @@ export function planGear(input = {}) {
       probabilityAchieved=costs.filter(cost=>cost<=quantileCost).length/runs;
     }
   }
+  if(confidence===1&&!randomNeeded){quantileCost=costOf(maximumAttemptsByStage).cost;probabilityAchieved=1;}
   const expectedCost=exactTrial?exactTrial.cost:costSum/runs;
   const standardErrorCost=runs>1?Math.sqrt(Math.max(0,costSquares/runs-(costSum/runs)**2)/runs):0;
   if(!deterministic)warnings.push('Бюджет із заданою ймовірністю не є гарантією. Рідкісні довгі серії невдач можуть потребувати більше грошей.');
@@ -235,4 +243,14 @@ export function planGear(input = {}) {
     expectedCost:issues.length?null:expectedCost,expectedCashOut:issues.length?null:expectedCost,
     quantileCost:issues.length?null:quantileCost,confidence,
     probabilityAchieved:issues.length?null:probabilityAchieved,method,iterations:runs,seed,standardErrorCost};
+}
+/** Keep known subtotals useful when a unit price is missing, without presenting
+ * a zero-priced ingredient as a complete craft budget. */
+export function priceGear(input={}){
+  const plan=planGear(input);
+  if(plan.eligible||!plan.issues.length||plan.issues.some(issue=>!issue.startsWith('Потрібна ціна матеріалу')))return plan;
+  const missing=new Set(input.stages.flatMap(stage=>stage.materials.filter(row=>!nonnegative(row.price)).map(row=>row.id)));
+  const partial=planGear({...input,resourceOptions:null,stages:input.stages.map(stage=>({...stage,materials:stage.materials.map(row=>({...row,price:nonnegative(row.price)?row.price:0}))}))});
+  if(!partial.eligible)return plan;
+  return {...partial,eligible:false,partial:true,partialCost:partial.expectedCost,expectedCost:null,expectedCashOut:null,quantileCost:null,issues:plan.issues,missingPriceIds:[...missing],expectedMaterials:partial.expectedMaterials.map(row=>missing.has(row.id)?{...row,price:null,cost:null}:row)};
 }

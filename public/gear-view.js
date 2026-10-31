@@ -18,7 +18,7 @@ export function selectGearRange({stages,startId='',startMode='buy',inventory={},
   const selected=structuredClone(stages.slice(index+1)),first=selected[0],input=stages[index];
   const price=quoteStart?.(startId)||{price:null,source:'market'};
   first.materials.push({id:startId,itemId:startId,name:input.name,nameEn:input.nameEn,nameRu:input.nameRu,icon:input.icon,quantity:first.inputQuantity??1,...price});
-  first.inputQuantity=1;
+  first.inputQuantity=1;delete first.predecessorBypassProbability;
   const kept=new Set(selected.map(stage=>stage.id));
   return {stages:selected,inventory:Object.fromEntries(Object.entries(inventory).filter(([id])=>kept.has(id))),
     materialInventory:startMode==='owned'?{[startId]:inventory[startId]??0}:{},issues};
@@ -49,7 +49,7 @@ export function gearRangeIssues(graph,stages,catalog,startId='') {
  * onPick is an optional input-picker initializer; return a cleanup function/object.
  */
 export function mountGearView(host,initialOptions) {
-  let options={...initialOptions},settings={...initialOptions.settings},result=null,busy=false,request=0,disposed=false,pickerCleanup;
+  let options={...initialOptions},settings={...initialOptions.settings},result=null,busy=false,request=0,disposed=false,pickerCleanup,changeTimer,displayMode='best';
   let graph,baselineGraph,range,issues=[],targetItems=[],items=new Map();
   const find=selector=>host.querySelector(selector);
   const language=()=>options.language||'ru';
@@ -81,10 +81,11 @@ export function mountGearView(host,initialOptions) {
     range.materialInventory={};
     issues=[...range.issues,...gearRangeIssues(graph,range.stages,options.catalog,settings.gearStartId)];
   }
+  function scheduleRun(){clearTimeout(changeTimer);changeTimer=setTimeout(()=>{if(!disposed)run();},250);}
   function cleanupPicker(){if(typeof pickerCleanup==='function')pickerCleanup();else pickerCleanup?.destroy?.();pickerCleanup=null;}
-  function pickTarget(id){if(!targetItems.some(candidate=>candidate.id===String(id)))return;changed({gearTarget:String(id),gearStartId:''});result=null;busy=false;request++;prepare();render();}
+  function pickTarget(id){if(!targetItems.some(candidate=>candidate.id===String(id)))return;changed({gearTarget:String(id),gearStartId:''});result=null;busy=false;request++;prepare();render();scheduleRun();}
   function render(){
-    if(disposed)return;cleanupPicker();
+    if(disposed)return;const active=host.ownerDocument.activeElement,focusKey=host.contains(active)?active?.dataset?.gvPrice||(['gv-count'].includes(active?.id)?active.id:null):null;cleanupPicker();
     const ready=graph.items.slice(0,-1),inventory=settings.gearInventory||{},start=settings.gearStartId||'';
     const stockItems=graph.items.filter(row=>range.stages.some(stage=>stage.id===row.id));
     const hasStock=[...Object.values(range.inventory),...Object.values(range.materialInventory)].some(value=>value>0);
@@ -97,6 +98,7 @@ export function mountGearView(host,initialOptions) {
     bind();renderMaterials();renderSummary();
     if(options.onPick){const input=find('#gv-target');input.addEventListener('focus',()=>input.select());pickerCleanup=options.onPick({input,mode:'gear',catalog:options.catalog,language:language(),faction:options.faction,onSelect:value=>pickTarget(typeof value==='object'?value.itemId??value.id:value)});}
     else fallbackPicker();
+    if(focusKey){const field=[...host.querySelectorAll('input')].find(input=>(input.dataset.gvPrice||input.id)===focusKey);field?.focus?.({preventScroll:true});}
   }
   function bind(){
     find('.gv-form').onsubmit=event=>{
@@ -110,12 +112,12 @@ export function mountGearView(host,initialOptions) {
     for(const [selector,key] of [['#gv-start','gearStartId'],['#gv-count','gearCount'],['#gv-confidence','confidence']])find(selector).onchange=event=>{
       const value=key==='gearStartId'?event.target.value:Number(event.target.value);
       if(key==='gearCount'&&(!Number.isSafeInteger(value)||value<1||value>100))return;
-      changed({[key]:value});result=null;busy=false;request++;prepare();render();
+      changed({[key]:value});result=null;busy=false;request++;prepare();render();scheduleRun();
     };
-    host.querySelectorAll('[name="gv-start-mode"]').forEach(input=>input.onchange=()=>{changed({gearStartMode:input.value});result=null;busy=false;request++;prepare();render();});
-    find('#gv-count').oninput=event=>{const value=Number(event.target.value);if(!Number.isSafeInteger(value)||value<1||value>100)return;changed({gearCount:value});result=null;busy=false;request++;renderSummary();};
-    host.querySelectorAll('[data-gv-stock]').forEach(input=>input.oninput=()=>{const value=Number(input.value);if(!Number.isSafeInteger(value)||value<0||value>1000000)return;changed({gearInventory:{...settings.gearInventory,[input.dataset.gvStock]:value}});result=null;busy=false;request++;prepare();renderSummary();});
-    host.querySelectorAll('[data-gv-stock]').forEach(input=>input.onchange=()=>{const value=Number(input.value);if(!Number.isSafeInteger(value)||value<0||value>1000000)return;changed({gearInventory:{...settings.gearInventory,[input.dataset.gvStock]:value}});result=null;busy=false;request++;prepare();render();});
+    host.querySelectorAll('[name="gv-start-mode"]').forEach(input=>input.onchange=()=>{changed({gearStartMode:input.value});result=null;busy=false;request++;prepare();render();scheduleRun();});
+    find('#gv-count').oninput=event=>{const value=Number(event.target.value);if(!Number.isSafeInteger(value)||value<1||value>100)return;changed({gearCount:value});result=null;busy=false;request++;renderSummary();scheduleRun();};
+    host.querySelectorAll('[data-gv-stock]').forEach(input=>input.oninput=()=>{const value=Number(input.value);if(!Number.isSafeInteger(value)||value<0||value>1000000)return;changed({gearInventory:{...settings.gearInventory,[input.dataset.gvStock]:value}});result=null;busy=false;request++;prepare();renderSummary();scheduleRun();});
+    host.querySelectorAll('[data-gv-stock]').forEach(input=>input.onchange=()=>{const value=Number(input.value);if(!Number.isSafeInteger(value)||value<0||value>1000000)return;changed({gearInventory:{...settings.gearInventory,[input.dataset.gvStock]:value}});result=null;busy=false;request++;prepare();render();scheduleRun();});
   }
   function fallbackPicker(){
     const input=find('#gv-target'),menu=find('.gv-fallback');
@@ -123,7 +125,10 @@ export function mountGearView(host,initialOptions) {
     input.onfocus=()=>{input.select();show();};input.oninput=show;input.onkeydown=event=>{if(event.key==='Escape')menu.hidden=true;if(event.key==='Enter'&&!menu.hidden){event.preventDefault();menu.querySelector('button')?.click();}};
     const outside=event=>{if(!find('.gv-target')?.contains(event.target))menu.hidden=true;};document.addEventListener('pointerdown',outside);pickerCleanup=()=>document.removeEventListener('pointerdown',outside);
   }
+  function visiblePlan(){return displayMode==='direct'&&result?.direct?.eligible?result.direct:result?.plan;}
   function materialRows(){
+    const calculated=visiblePlan();
+    if(calculated?.eligible||calculated?.partial){const rows=calculated.resourceAcquisition?calculated.expectedPurchases:calculated.expectedMaterials;return rows.map(row=>({...row,...quote(row.id),computed:{...row,buyQuantity:row.buyQuantity??row.quantity}})).sort((a,b)=>(b.computed.cost??0)-(a.computed.cost??0));}
     const map=new Map();
     for(const stage of range.stages)for(const row of stage.materials)if(!map.has(row.id))map.set(row.id,row.acquisition?row:{...row,...quote(row.id)});
     for(const row of [...map.values()])for(const source of row.acquisition?.inputs||[]){if(!map.has(source.id))map.set(source.id,{id:source.id,...quote(source.id),sourceInput:true});else if(!map.get(source.id).acquisition)map.get(source.id).sourceInput=true;}
@@ -131,10 +136,10 @@ export function mountGearView(host,initialOptions) {
       .sort((a,b)=>Number(b.price===null)-Number(a.price===null)||(result?.plan?.eligible?(b.computed?.cost??0)-(a.computed?.cost??0):name(a.id).localeCompare(name(b.id),language())));
   }
   function renderMaterials(){
-    const rows=materialRows(),calculated=result?.plan?.eligible;
+    const rows=materialRows(),calculated=visiblePlan()?.eligible||visiblePlan()?.partial;
     find('.gv-material-count').textContent=`${rows.length} матеріалів`;
     find('.gv-material-grid').innerHTML=rows.map(row=>`<article class="gv-material-card ${row.price===null?'gv-missing-price':''}"><div class="gv-card-head">${label(row.id)}</div><div class="gv-card-price"><label>Ціна за 1<input type="number" min="0" step="any" data-gv-price="${esc(row.id)}" aria-label="Ціна ${esc(name(row.id))}" value="${(Object.hasOwn(row,'directPrice')?row.directPrice:row.price)??''}" placeholder="З гри" ${row.source==='currency'?'readonly':''}></label>${calculated?`<div><small>Потрібно</small><strong>${number(row.sourceInput?row.computed?.quantity??0:row.computed?.buyQuantity??0,2)}</strong><small>Сума ${money(row.computed?.cost)}</small></div>`:''}</div>${row.acquisition?`<details class="gv-route-inputs"><summary>З ефіром · ${money(row.price)} / шт.</summary>${row.acquisition.inputs.map(input=>esc(name(input.id))).join(' + ')}</details>`:''}</article>`).join('');
-    host.querySelectorAll('[data-gv-price]').forEach(input=>input.oninput=()=>{const value=input.value===''?null:Number(input.value);if(value!==null&&!valid(value))return;options.overrides??={};if(value===null)delete options.overrides[input.dataset.gvPrice];else options.overrides[input.dataset.gvPrice]={price:value,at:new Date().toISOString()};options.onPrice?.(input.dataset.gvPrice,value);result=null;busy=false;request++;prepare();renderSummary();});
+    host.querySelectorAll('[data-gv-price]').forEach(input=>input.oninput=()=>{const value=input.value===''?null:Number(input.value);if(value!==null&&!valid(value))return;options.overrides??={};if(value===null)delete options.overrides[input.dataset.gvPrice];else options.overrides[input.dataset.gvPrice]={price:value,at:new Date().toISOString()};options.onPrice?.(input.dataset.gvPrice,value);result=null;busy=false;request++;prepare();renderSummary();scheduleRun();});
     host.querySelectorAll('[data-gv-price]').forEach(input=>input.onchange=()=>{
       const value=input.value===''?null:Number(input.value);if(value!==null&&!valid(value))return;
       options.overrides??={};if(value===null)delete options.overrides[input.dataset.gvPrice];else options.overrides[input.dataset.gvPrice]={price:value,at:new Date().toISOString()};
@@ -142,17 +147,19 @@ export function mountGearView(host,initialOptions) {
     });
   }
   function renderSummary(){
-    const summary=find('.gv-summary'),plan=result?.plan,baseline=result?.baseline,direct=result?.direct;
+    const summary=find('.gv-summary'),plan=visiblePlan(),baseline=result?.baseline,direct=result?.direct;
     if(busy){summary.innerHTML='<div class="gv-result-empty"><span class="gv-spinner" aria-hidden="true"></span><strong>Рахую матеріали й невдачі…</strong></div>';return;}
     if(issues.length){summary.innerHTML=`<div class="gv-result-empty gv-total-unavailable"><strong>Загальна сума поки невідома</strong><p>${esc(issues[0])}</p></div>`;return;}
+    if(plan?.partial){summary.innerHTML=`<div class="gv-summary-top"><small>Відомі витрати</small><strong>${money(plan.partialCost)} <em>Kinah</em></strong></div><button type="button" class="secondary gv-fill-price">${plan.missingPriceIds.length===1?'Ввести ціну':`Ввести ціни (${plan.missingPriceIds.length})`}</button>${settings.gearStartId&&plan.missingPriceIds.includes(settings.gearStartId)?'<button type="button" class="text-button gv-from-zero">Порахувати з нуля</button>':''}`;summary.querySelector('.gv-from-zero')?.addEventListener('click',()=>{changed({gearStartId:''});result=null;request++;prepare();render();scheduleRun();});summary.querySelector('.gv-fill-price').onclick=()=>host.querySelector('[data-gv-price="'+plan.missingPriceIds[0]+'"]')?.focus();return;}
     if(plan&&!plan.eligible){summary.innerHTML=`<div class="gv-result-empty"><strong>Додай ціни в підсвічених плитках</strong><p>${esc(plan.issues[0]||'Немає достатньо даних для розрахунку.')}</p></div>`;return;}
     if(!plan){summary.innerHTML='';return;}
     const count=settings.gearCount||1,tax=(options.saleTax??options.settings?.saleTax??0)+(options.listingTax??options.settings?.listingTax??0),full=baseline?.eligible?baseline.expectedCost/count:null,breakEven=full===null||tax>=100?null:full/(1-tax/100),listed=options.market?.items?.find(row=>String(row.id)===settings.gearTarget);
-    summary.innerHTML=`${plan.resourceAcquisition&&direct?.eligible&&Math.abs(direct.expectedCost-plan.expectedCost)>1?`<div class="gv-comparison"><div><small>Купити ресурси</small><strong>${money(direct?.expectedCost)}</strong></div><div><small>З ефіром · найкраща суміш</small><strong>${money(plan.expectedCost)}</strong></div></div>`:''}<div class="gv-summary-top"><small>У середньому</small><strong>${money(plan.expectedCost)} <em>Kinah</em></strong></div><div class="gv-budget"><small>Бюджет на ${percent(plan.confidence)} випадків</small><strong>${money(plan.quantileCost)} <em>Kinah</em></strong></div><details class="gv-sale"><summary>Орієнтир продажу за 1 шт.</summary><dl><div><dt>Повна собівартість із нуля</dt><dd>${money(full)}</dd></div><div><dt>Без збитку після комісій</dt><dd>${money(breakEven)}</dd></div><div><dt>Низ ринку зараз</dt><dd>${money(listed?.listed!==false?listed?.price:null)}</dd></div></dl></details><details class="gv-math"><summary>Як пораховано</summary>${range.stages.map((stage,index)=>`<p>${esc(name(stage.id))}: ${number(plan.expectedAttempts[index],2)} спроб у середньому, шанс потрібного результату ${percent(stage.successRate*stage.comboProbability*stage.comboSuccessRate)}.</p>`).join('')}${plan.expectedPurchases?.length?`<p><strong>Купити в середньому:</strong></p>${plan.expectedPurchases.map(row=>`<p>${number(row.quantity,2)} × ${esc(name(row.id))} · ${money(row.cost)} Kinah</p>`).join('')}`:''}<p>Бюджет: ${number(plan.iterations)} симуляцій. Побічні звичайні речі не віднімаються з витрат.</p></details>`;
+    summary.innerHTML=`${result?.plan?.resourceAcquisition&&direct?.eligible&&Math.abs(direct.expectedCost-result.plan.expectedCost)>1?`<div class="gv-comparison"><button type="button" data-gv-mode="direct" aria-pressed="${displayMode==='direct'}"><small>Купити матеріали</small><strong>${money(direct.expectedCost)}</strong></button><button type="button" data-gv-mode="best" aria-pressed="${displayMode!=='direct'}"><small>З ефіром</small><strong>${money(result.plan.expectedCost)}</strong></button></div>`:''}<div class="gv-summary-top"><small>У середньому</small><strong>${money(plan.expectedCost)} <em>Kinah</em></strong></div><div class="gv-budget"><small>Бюджет на ${percent(plan.confidence)} випадків</small><strong>${money(plan.quantileCost)} <em>Kinah</em></strong></div><details class="gv-sale"><summary>Орієнтир продажу за 1 шт.</summary><dl><div><dt>Повна собівартість із нуля</dt><dd>${money(full)}</dd></div><div><dt>Без збитку після комісій</dt><dd>${money(breakEven)}</dd></div><div><dt>Низ ринку зараз</dt><dd>${money(listed?.listed!==false?listed?.price:null)}</dd></div></dl></details><details class="gv-math"><summary>Як пораховано</summary>${range.stages.map((stage,index)=>`<p>${esc(name(stage.id))}: ${number(plan.expectedAttempts[index],2)} спроб у середньому, шанс потрібного результату ${percent(stage.successRate*stage.comboProbability*stage.comboSuccessRate)}.</p>`).join('')}${plan.expectedPurchases?.length?`<p><strong>Купити в середньому:</strong></p>${plan.expectedPurchases.map(row=>`<p>${number(row.quantity,2)} × ${esc(name(row.id))} · ${money(row.cost)} Kinah</p>`).join('')}`:''}<p>Бюджет: ${number(plan.iterations)} симуляцій. Побічні звичайні речі не віднімаються з витрат.</p></details>`;
+    summary.querySelectorAll('[data-gv-mode]').forEach(button=>button.onclick=()=>{displayMode=button.dataset.gvMode;renderSummary();renderMaterials();});
     const warnings=[...new Set(graph.sourceWarnings||[])];find('.gv-bottom').innerHTML=warnings.length?`<details><summary>Про джерела й ціни</summary>${warnings.map(warning=>`<p>${esc(warning)}</p>`).join('')}</details>`:'';
   }
   async function run(){
-    if(busy||disposed)return;prepare();if(issues.length){renderSummary();return;}
+    clearTimeout(changeTimer);if(busy||disposed)return;prepare();if(issues.length){renderSummary();return;}
     busy=true;const current=++request;render();
     try{
       const resourceOptions=graph.resourceOptions?{...graph.resourceOptions,quotesById:{...graph.resourceOptions.quotesById}}:null;
@@ -162,6 +169,6 @@ export function mountGearView(host,initialOptions) {
     }catch(error){if(!disposed&&current===request)result={plan:{eligible:false,issues:[error.message]}};}
     finally{if(!disposed&&current===request){busy=false;render();}}
   }
-  prepare();render();
-  return {destroy(){disposed=true;request++;cleanupPicker();host.innerHTML='';},update(next){options={...options,...next};settings={...settings,...next.settings};result=null;request++;busy=false;prepare();render();},selectTarget:pickTarget};
+  prepare();render();scheduleRun();
+  return {destroy(){clearTimeout(changeTimer);disposed=true;request++;cleanupPicker();host.innerHTML='';},update(next){options={...options,...next};settings={...settings,...next.settings};result=null;request++;busy=false;prepare();render();scheduleRun();},selectTarget:pickTarget};
 }

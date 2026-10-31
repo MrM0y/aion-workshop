@@ -1,3 +1,4 @@
+import {acquisitionBatch} from '../public/resource-batch.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {compareResourcePurchase} from '../public/purchase-comparison.js';
@@ -47,4 +48,10 @@ test('disabled conversion scenario remains the same direct purchase',()=>{
   const options=setup(['wood'],[conversion('wood','wood','ether')],{wood:book([[10,20]]),ether:book([[3,20]])});
   const result=compareResourcePurchase({...options,resourceOptions:null});
   assert.equal(result.savings,0);assert.equal(result.ether.cashRequired,result.direct.cashRequired);
+});
+
+test('a finite direct book cannot hide cheaper estimated ether, while finite purchase stays separate',()=>{
+  const options=setup(['wood'],[conversion('wood','wood','ether')],{wood:book([[10,20]]),ether:{manualPrice:3}});
+  const comparison=compareResourcePurchase(options);assert.equal(comparison.direct.cashRequired,33);assert.equal(comparison.ether.cashRequired,12);assert.equal(comparison.ether.priceOnly,true);assert.equal(comparison.ether.verified,false);
+  const finite=acquisitionBatch({...options,allowFlatEstimates:false});assert.equal(finite.cashRequired,33,'only known wood units support the finite plan');
 });

@@ -1,3 +1,4 @@
+import {rateFor} from '../public/market-model.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadCatalog} from '../lib/catalog.mjs';
@@ -55,4 +56,18 @@ test('optimistic gear scenario removes failed rolls but retains activation and a
   assert.equal(ideal.stages[0].comboProbability,.25);
   assert.ok(actual.stages[0].successRate<1);
   assert.ok(ideal.sourceWarnings.some(text=>text.includes('Оптимістичний')));
+});
+
+test('Dragon Lord transfer stages have sourced rates and skip a transfer on useful COMBO',async()=>{
+  const catalog=await loadCatalog(),market={items:catalog.items.map(row=>({id:row.id,price:1000,listed:true}))};
+  const graph=buildGearStages({catalog,targetId:'110130105',faction:'Asmodian',market});assert.deepEqual(graph.issues,[]);
+  const stages=graph.stages.slice(-2);assert.equal(stages[0].successRate,1);assert.equal(stages[1].predecessorBypassProbability,.25);
+  const p=planGear({stages,iterations:1000});assert.equal(p.eligible,true);assert.ok(p.expectedCost>0);assert.equal(p.expectedAttempts[0],1);assert.equal(p.expectedAttempts[1],.75);
+});
+
+test('transfer fallback is scoped to donor-based Dragon Lord gear; unrelated unknown rates stay unknown',()=>{
+  const row={id:'1',nameEn:'Dragon Lord Sword',section:'succession',masteryLevel:0,yield:1,resultId:'110000001',successRate:null,successionFrom:['110000002'],materials:[{itemId:'110000002',quantity:1,isDonor:true}]};
+  assert.equal(rateFor(row,{},100).base,1);
+  for(const patch of [{section:'craft'},{nameEn:'Unknown Sword'},{successionFrom:[]},{materials:[]},{masteryLevel:1}])assert.equal(rateFor({...row,...patch},{},100).known,false);
+  assert.equal(rateFor({...row,successRate:.8},{},100).base,.8,'explicit source probability takes precedence');
 });

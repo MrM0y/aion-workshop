@@ -27,11 +27,12 @@ function chooseProducer(ctx,id,faction,mastery,preferredId) {
   const candidates=(ctx.producers.get(String(id))||[]).filter(({recipe})=>matches(recipe,faction));
   const score=entry=>{
     const r=entry.recipe,rate=rateFor(r,ctx.catalog,mastery);
-    return (rate.available?0:100)+(rate.known?0:10)+(r.section==='craft'?0:r.section==='succession'?2:4)+(entry.kind==='normal'?0:1);
+    return (rate.available?0:100)+(rate.known?0:10)+(r.section==='succession'&&entry.kind==='normal'&&rate.base===1&&rate.activation===0?-2:r.section==='craft'?0:r.section==='succession'?2:4)+(entry.kind==='normal'?0:1);
   };
+  const transfer=entry=>{const rates=rateFor(entry.recipe,ctx.catalog,mastery);return entry.recipe.section==='succession'&&entry.kind==='normal'&&rates.known&&rates.base===1&&rates.activation===0;};
   candidates.sort((a,b)=>{
     const preferredA=String(a.recipe.id)===String(preferredId),preferredB=String(b.recipe.id)===String(preferredId);
-    return Number(preferredB)-Number(preferredA)||score(a)-score(b)||String(a.recipe.id).localeCompare(String(b.recipe.id),'en',{numeric:true});
+    return Number(transfer(b))-Number(transfer(a))||Number(preferredB)-Number(preferredA)||score(a)-score(b)||String(a.recipe.id).localeCompare(String(b.recipe.id),'en',{numeric:true});
   });
   return {selected:candidates[0]||null,count:candidates.length};
 }
@@ -130,6 +131,16 @@ export function buildGearStages({catalog,targetId,faction='Elyos',mastery=100,ma
   }
   if(targetId==null||!isGearItem(ctx.items.get(String(targetId))||targetId))issue('Обери предмет спорядження з каталогу.');
   else visit(String(targetId));
+  // A useful COMBO already is the next transfer's result: pay that transfer only
+  // for ordinary outcomes, while retaining failures of the preceding craft.
+  for(let i=1;i<stages.length;i++){
+    const previous=stages[i-1],current=stages[i],recipe=ctx.recipes.find(row=>String(row.id)===previous.recipeId);
+    if(previous.outputKind!=='normal'||String(recipe?.comboResultId)!==current.id||current.successRate!==1||current.comboProbability!==1||current.comboSuccessRate!==1||current.inputQuantity!==1)continue;
+    const rates=rateFor(recipe,catalog,mastery),useful=rates.base*((1-rates.activation)+rates.activation*rates.combo);
+    if(!rates.known||!(useful>0))continue;
+    current.predecessorBypassProbability=rates.base*rates.activation*rates.combo/useful;
+    previous.successRate=includeFailures?useful:1;previous.comboProbability=1;previous.comboSuccessRate=1;previous.hasCombo=false;
+  }
   const resourceOptions=resourceSettings.useConversions===false?null:{catalog,faction,mastery,...resourcePolicy(catalog,resourceSettings),quotesById:Object.fromEntries(resourceRouter.requiredIds(stages.flatMap(stage=>stage.materials.map(row=>row.id))).map(id=>{const quoted=rawQuote(id);return [id,quoted.source==='vendor'||quoted.source==='currency'?{vendorPrice:quoted.price,vendorReference:false}:{flatPrice:quoted.price}];}))};
   return {stages,items:outputItems,issues,sourceWarnings,chainStartsFromPurchase,resourceOptions};
 }
